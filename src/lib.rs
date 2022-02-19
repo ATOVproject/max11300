@@ -460,6 +460,7 @@ where
 }
 
 /// High impedance Mode
+#[derive(Clone, Copy)]
 pub struct ConfigMode0;
 impl ConfigMode0 {
     fn as_u16(&self) -> u16 {
@@ -468,6 +469,7 @@ impl ConfigMode0 {
 }
 
 /// Digital input with programmable threshold, GPI
+#[derive(Clone, Copy)]
 pub struct ConfigMode1;
 impl ConfigMode1 {
     fn as_u16(&self) -> u16 {
@@ -476,6 +478,7 @@ impl ConfigMode1 {
 }
 
 /// Bidirectional level translator terminal
+#[derive(Clone, Copy)]
 pub struct ConfigMode2;
 impl ConfigMode2 {
     fn as_u16(&self) -> u16 {
@@ -484,6 +487,7 @@ impl ConfigMode2 {
 }
 
 /// Register-driven digital output with DACcontrolled level, GPO
+#[derive(Clone, Copy)]
 pub struct ConfigMode3;
 impl ConfigMode3 {
     fn as_u16(&self) -> u16 {
@@ -492,6 +496,7 @@ impl ConfigMode3 {
 }
 
 /// Unidirectional path output with DACcontrolled level, GPO
+#[derive(Clone, Copy)]
 pub struct ConfigMode4(pub INV, pub Port);
 impl ConfigMode4 {
     fn as_u16(&self) -> u16 {
@@ -509,6 +514,7 @@ impl ConfigMode5 {
 }
 
 /// Analog output for DAC with ADC monitoring
+#[derive(Clone, Copy)]
 pub struct ConfigMode6(pub AVR, pub DACRANGE);
 impl ConfigMode6 {
     fn as_u16(&self) -> u16 {
@@ -517,6 +523,7 @@ impl ConfigMode6 {
 }
 
 /// Positive analog input to single-ended ADC
+#[derive(Clone, Copy)]
 pub struct ConfigMode7(pub AVR, pub ADCRANGE, pub NSAMPLES);
 impl ConfigMode7 {
     fn as_u16(&self) -> u16 {
@@ -525,6 +532,7 @@ impl ConfigMode7 {
 }
 
 /// Positive analog input to differential ADC
+#[derive(Clone, Copy)]
 pub struct ConfigMode8(pub AVR, pub ADCRANGE, pub NSAMPLES, pub Port);
 impl ConfigMode8 {
     fn as_u16(&self) -> u16 {
@@ -533,6 +541,7 @@ impl ConfigMode8 {
 }
 
 /// Negative analog input to differential ADC
+#[derive(Clone, Copy)]
 pub struct ConfigMode9(pub AVR, pub ADCRANGE);
 impl ConfigMode9 {
     fn as_u16(&self) -> u16 {
@@ -541,6 +550,7 @@ impl ConfigMode9 {
 }
 
 /// Analog output for DAC and negative analog input to differential ADC (pseudo-differential mode)
+#[derive(Clone, Copy)]
 pub struct ConfigMode10(pub AVR, pub DACRANGE);
 impl ConfigMode10 {
     fn as_u16(&self) -> u16 {
@@ -549,6 +559,7 @@ impl ConfigMode10 {
 }
 
 /// Terminal to GPIcontrolled analog switch
+#[derive(Clone, Copy)]
 pub struct ConfigMode11(pub INV, pub Port);
 impl ConfigMode11 {
     fn as_u16(&self) -> u16 {
@@ -557,6 +568,7 @@ impl ConfigMode11 {
 }
 
 /// Terminal to registercontrolled analog switch
+#[derive(Clone, Copy)]
 pub struct ConfigMode12(pub INV, pub Port);
 impl ConfigMode12 {
     fn as_u16(&self) -> u16 {
@@ -630,11 +642,13 @@ where
     }
 }
 
-pub struct MultiportMode5<'a, SPI, EN, const N: usize> {
-    configs: [ConfigMode5; N],
-    ports: [Port; N],
-    bus: &'a RefCell<SPIBus<SPI, EN>>,
-}
+seq!(Z in 0..=12 {
+    pub struct MultiportMode~Z<'a, SPI, EN, const N: usize> {
+        configs: [ConfigMode~Z; N],
+        ports: [Port; N],
+        bus: &'a RefCell<SPIBus<SPI, EN>>,
+    }
+});
 
 impl<'a, SPI, EN, S, P, const N: usize> MultiportMode5<'a, SPI, EN, N>
 where
@@ -723,35 +737,37 @@ seq!(N in 0..=12 {
     }
 });
 
-impl<'a, SPI, EN, S, P, const N: usize>
-    ConfigureMultiport<'a, MultiportMode5<'a, SPI, EN, N>, ConfigMode5, S, P, N>
-    for MAX11300<SPI, EN>
-where
-    SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-    EN: OutputPin<Error = P>,
-{
-    fn configure_multiport(
-        &'a mut self,
-        ports: [Port; N],
-        config: ConfigMode5,
-    ) -> Result<MultiportMode5<'a, SPI, EN, N>, Error<S, P>> {
-        // Check if all the ports are in a row
-        // We might weaken this requirement in the future and use the context based burst mode
-        for neighbours in ports.windows(2) {
-            if neighbours[1] as u8 != (neighbours[0] as u8) + 1 {
-                return Err(Error::Port);
+seq!(Z in 0..=12 {
+    impl<'a, SPI, EN, S, P, const N: usize>
+        ConfigureMultiport<'a, MultiportMode~Z<'a, SPI, EN, N>, ConfigMode~Z, S, P, N>
+        for MAX11300<SPI, EN>
+    where
+        SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
+        EN: OutputPin<Error = P>,
+    {
+        fn configure_multiport(
+            &'a mut self,
+            ports: [Port; N],
+            config: ConfigMode~Z,
+        ) -> Result<MultiportMode~Z<'a, SPI, EN, N>, Error<S, P>> {
+            // Check if all the ports are in a row
+            // We might weaken this requirement in the future and use the context based burst mode
+            for neighbours in ports.windows(2) {
+                if neighbours[1] as u8 != (neighbours[0] as u8) + 1 {
+                    return Err(Error::Port);
+                }
             }
+            let data = [config.as_u16(); N];
+            // Use the same config for all, initially
+            let configs = [config; N];
+            self.bus
+                .borrow_mut()
+                .write_registers(ports[0].as_config_addr(), &data)?;
+            Ok(MultiportMode~Z {
+                configs,
+                ports,
+                bus: &self.bus,
+            })
         }
-        let data = [config.as_u16(); N];
-        // Use the same config for all, initially
-        let configs = [config; N];
-        self.bus
-            .borrow_mut()
-            .write_registers(ports[0].as_config_addr(), &data)?;
-        Ok(MultiportMode5 {
-            configs,
-            ports,
-            bus: &self.bus,
-        })
     }
-}
+});
