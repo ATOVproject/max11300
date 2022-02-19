@@ -1,3 +1,5 @@
+#![no_std]
+
 use core::cell::RefCell;
 
 use embedded_hal::blocking::spi::{Transfer, Write};
