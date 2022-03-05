@@ -207,6 +207,7 @@ pub enum BRST {
     Contextual,
 }
 
+/// Device configuration. Contains all the config options for intial setup
 pub struct DeviceConfig {
     pub adcctl: ADCCTL,
     pub dacctl: DACCTL,
@@ -725,6 +726,22 @@ where
 pub struct Mode0Port(Port);
 
 pub trait IntoConfiguredPort<'a, CONFIG, SPI, EN, S, P> {
+    /// Configure a port for a certain mode
+    /// # Arguments
+    ///
+    /// * `config` - ConfigModeN object
+    /// * `max` - Reference to the max object
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let max_ports = MAXPorts::take().unwrap();
+    /// let p0 = max_ports
+    ///     .port0
+    ///     // To configure the port for mode 5 (DAC) with a range of 0 to 10V
+    ///     .into_configured_port(ConfigMode5(DACRANGE::Rg0_10v), &max)
+    ///     .unwrap();
+    /// ```
     fn into_configured_port(
         self,
         config: CONFIG,
@@ -760,6 +777,7 @@ seq!(N in 0..=12 {
 /// Set to `true` when `take` or is called to make `MAXPorts` a singleton.
 static mut TAKEN: bool = false;
 
+/// All of the MAX11300 ports at your convenience to configure
 pub struct MAXPorts {
     pub port0: Mode0Port,
     pub port1: Mode0Port,
@@ -829,6 +847,24 @@ where
     SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
     EN: OutputPin<Error = P>,
 {
+    /// Initialize the MAX11300 device
+    /// # Arguments
+    ///
+    /// * `spi` - embedded-hal compatible SPI instance
+    /// * `enable` - embedded-hal compatible GPIO pin
+    /// * `config` - The MAX11300 device configuration struct
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// // Get `spi` and `enable` from your embedded-hal
+    /// let config = DeviceConfig {
+    ///     // to enable the internal voltage reference for the DAC
+    ///     dacref: DACREF::InternalRef,
+    ///     ..Default::default()
+    /// };
+    /// let max = MAX11300::init(spi, enable, config).unwrap();
+    /// ```
     pub fn init(spi: SPI, enable: EN, config: DeviceConfig) -> Result<Self, Error<S, P>> {
         let bus = RefCell::new(SPIBus::init(spi, enable)?);
         bus.borrow_mut()
@@ -837,7 +873,9 @@ where
         Ok(Self { config, bus })
     }
 
+    /// Initialize the MAX11300 device. Equal to a power-cycle
     pub fn reset(&mut self) -> Result<(), Error<S, P>> {
+        self.config = DeviceConfig::default();
         self.bus
             .borrow_mut()
             .write_register(REG_DEVICE_CTRL, 1 << 15)
