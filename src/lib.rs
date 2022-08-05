@@ -524,7 +524,7 @@ where
         start_address: u8,
         data: &'a mut [u16],
     ) -> Result<&'a [u16], Error<S, P>> {
-        if data.len() > 20 || start_address + data.len() as u8 > MAX_ADDRESS {
+        if data.len() > 20 || start_address + data.len() as u8 - 1 > MAX_ADDRESS {
             return Err(Error::Address);
         }
         // 1 address byte, 2x20 data bytes maximum
@@ -557,7 +557,7 @@ where
     }
 
     fn write_registers(&mut self, start_address: u8, data: &[u16]) -> Result<(), Error<S, P>> {
-        if data.len() > 20 || start_address + data.len() as u8 > MAX_ADDRESS {
+        if data.len() > 20 || start_address + data.len() as u8 - 1 > MAX_ADDRESS {
             return Err(Error::Address);
         }
         // 1 address byte, 2x20 data bytes maximum
