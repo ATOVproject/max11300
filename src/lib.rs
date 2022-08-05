@@ -155,9 +155,9 @@ pub enum THSHDN {
 }
 
 /// Temperature monitor selection
-/// TMPCTL[0]: Internal temperature monitor (0: disabled; 1: enabled)
-/// TMPCTL[1]: 1st external temperature monitor (0: disabled; 1: enabled)
-/// TMPCTL[2]: 2nd external temperature monitor (0: disabled; 1: enabled)
+/// * TMPCTL[0]: Internal temperature monitor (0: disabled; 1: enabled)
+/// * TMPCTL[1]: 1st external temperature monitor (0: disabled; 1: enabled)
+/// * TMPCTL[2]: 2nd external temperature monitor (0: disabled; 1: enabled)
 #[derive(Clone, Copy)]
 pub struct TMPCTL(u8, u8, u8);
 
@@ -729,8 +729,8 @@ pub trait IntoConfiguredPort<'a, CONFIG, SPI, EN, S, P> {
     /// Configure a port for a certain mode
     /// # Arguments
     ///
-    /// * `config` - ConfigModeN object
-    /// * `max` - Reference to the max object
+    /// * `config` - `ConfigModeN` object
+    /// * `max` - Reference to the `max` object
     ///
     /// # Example
     ///
@@ -861,7 +861,7 @@ where
     /// let config = DeviceConfig {
     ///     // to enable the internal voltage reference for the DAC
     ///     dacref: DACREF::InternalRef,
-    ///     ..Default::default()
+    ///     ..DeviceConfig::default()
     /// };
     /// let max = MAX11300::init(spi, enable, config).unwrap();
     /// ```

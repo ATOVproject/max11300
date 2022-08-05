@@ -1,6 +1,6 @@
 [![crates.io](https://img.shields.io/crates/d/max11300.svg)](https://crates.io/crates/max11300)
 [![crates.io](https://img.shields.io/crates/v/max11300.svg)](https://crates.io/crates/max11300)
-[![Documentation](https://docs.rs/max11300/badge.svg)](https://docs.rs/11300)
+[![Documentation](https://docs.rs/max11300/badge.svg)](https://docs.rs/max11300)
 ![Minimum Supported Rust Version](https://img.shields.io/badge/rustc-1.46+-blue.svg)
 
 # `max11300`
