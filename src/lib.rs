@@ -2,8 +2,7 @@
 
 use core::cell::RefCell;
 
-use embedded_hal::blocking::spi::{Transfer, Write};
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::spi::SpiDevice;
 use heapless::Vec;
 use seq_macro::seq;
 
@@ -24,17 +23,21 @@ const REG_ADC_DATA: u8 = 0x40;
 const REG_DAC_DATA: u8 = 0x60;
 
 #[derive(Debug)]
-pub enum Error<S, P> {
+pub enum Error<S> {
     /// SPI bus error
     Spi(S),
-    /// Pin error
-    Pin(P),
     /// Connection error (device not found)
     Conn,
     /// Address error (invalid or out of bounds)
     Address,
     /// Port error (invalid or out of bounds)
     Port,
+}
+
+impl<S> From<S> for Error<S> {
+    fn from(error: S) -> Self {
+        Error::Spi(error)
+    }
 }
 
 /// Available Ports
@@ -489,74 +492,68 @@ impl ConfigMode12 {
     }
 }
 
-struct SPIBus<SPI, EN> {
+struct SPIBus<SPI> {
     spi: SPI,
-    enable: EN,
 }
 
-impl<SPI, EN, S, P> SPIBus<SPI, EN>
+impl<SPI, S> SPIBus<SPI>
 where
-    SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-    EN: OutputPin<Error = P>,
+    SPI: SpiDevice<Error = S>,
+    S: Into<Error<S>>,
 {
-    fn init(spi: SPI, mut enable: EN) -> Result<Self, Error<S, P>> {
-        enable.set_high().map_err(Error::Pin)?;
-        let mut bus = Self { spi, enable };
+    fn init(spi: SPI) -> Result<Self, Error<S>> {
+        let mut bus = Self { spi };
         if bus.read_register(REG_DEVICE_ID)? != DEVICE_ID {
             return Err(Error::Conn);
         }
         Ok(bus)
     }
 
-    fn read_register(&mut self, address: u8) -> Result<u16, Error<S, P>> {
+    fn read_register(&mut self, address: u8) -> Result<u16, Error<S>> {
         if address > MAX_ADDRESS {
             return Err(Error::Address);
         }
-        self.enable.set_low().map_err(Error::Pin)?;
-        let mut buf = [(address << 1 | 1), 0, 0];
-        self.spi.transfer(&mut buf).map_err(Error::Spi)?;
-        self.enable.set_high().map_err(Error::Pin)?;
-        Ok((buf[1] as u16) << 8 | buf[2] as u16)
+        let mut buf = [0, 0];
+        self.spi
+            .transfer(&mut buf, &[address << 1 | 1])
+            .map_err(Error::Spi)?;
+        Ok((buf[0] as u16) << 8 | buf[1] as u16)
     }
 
     fn read_registers<'a>(
         &mut self,
         start_address: u8,
         data: &'a mut [u16],
-    ) -> Result<&'a [u16], Error<S, P>> {
+    ) -> Result<&'a [u16], Error<S>> {
         if data.len() > 20 || start_address + data.len() as u8 - 1 > MAX_ADDRESS {
             return Err(Error::Address);
         }
-        // 1 address byte, 2x20 data bytes maximum
-        let mut buf: Vec<u8, 41> = Vec::new();
+        // 2x20 data bytes maximum
+        let mut buf: Vec<u8, 40> = Vec::new();
         // Actual size of u16 output buffer times two plus address byte
-        buf.resize(data.len() * 2 + 1, 0).ok();
-        // Read instruction
-        buf[0] = start_address << 1 | 1;
+        buf.resize(data.len() * 2, 0).ok();
         // Read values into buf
-        self.enable.set_low().map_err(Error::Pin)?;
-        self.spi.transfer(&mut buf).map_err(Error::Spi)?;
-        self.enable.set_high().map_err(Error::Pin)?;
+        self.spi
+            .transfer(&mut buf, &[start_address << 1 | 1])
+            .map_err(Error::Spi)?;
         // Copy to data buffer
-        for (i, bytes) in buf[1..].chunks(2).enumerate() {
+        for (i, bytes) in buf.chunks(2).enumerate() {
             data[i] = (bytes[0] as u16) << 8 | bytes[1] as u16;
         }
         Ok(data)
     }
 
-    fn write_register(&mut self, address: u8, data: u16) -> Result<(), Error<S, P>> {
+    fn write_register(&mut self, address: u8, data: u16) -> Result<(), Error<S>> {
         if address > MAX_ADDRESS {
             return Err(Error::Address);
         }
-        self.enable.set_low().map_err(Error::Pin)?;
         self.spi
             .write(&[address << 1, (data >> 8) as u8, (data & 0xff) as u8])
             .map_err(Error::Spi)?;
-        self.enable.set_high().map_err(Error::Pin)?;
         Ok(())
     }
 
-    fn write_registers(&mut self, start_address: u8, data: &[u16]) -> Result<(), Error<S, P>> {
+    fn write_registers(&mut self, start_address: u8, data: &[u16]) -> Result<(), Error<S>> {
         if data.len() > 20 || start_address + data.len() as u8 - 1 > MAX_ADDRESS {
             return Err(Error::Address);
         }
@@ -570,34 +567,32 @@ where
             buf[i * 2 + 1] = (data_u16 >> 8) as u8;
             buf[i * 2 + 2] = (data_u16 & 0xff) as u8;
         }
-        self.enable.set_low().map_err(Error::Pin)?;
         self.spi.write(&buf).map_err(Error::Spi)?;
-        self.enable.set_high().map_err(Error::Pin)?;
         Ok(())
     }
 }
 
-pub struct MAXPort<'a, CONFIG, SPI, EN> {
+pub struct MAXPort<'a, CONFIG, SPI> {
     config: CONFIG,
     port: Port,
-    max: &'a MAX11300<SPI, EN>,
+    max: &'a MAX11300<SPI>,
 }
 
-pub trait IntoMode<'a, CONFIG, SPI, EN, S, P> {
-    fn into_mode(self, config: CONFIG) -> Result<MAXPort<'a, CONFIG, SPI, EN>, Error<S, P>>;
+pub trait IntoMode<'a, CONFIG, SPI, EN, S> {
+    fn into_mode(self, config: CONFIG) -> Result<MAXPort<'a, CONFIG, SPI>, Error<S>>;
 }
 
 seq!(N in 0..=12 {
-    impl<'a, CONFIG, SPI, EN, S, P> IntoMode<'a, ConfigMode~N, SPI, EN, S, P>
-        for MAXPort<'a, CONFIG, SPI, EN>
+    impl<'a, CONFIG, SPI, EN, S> IntoMode<'a, ConfigMode~N, SPI, EN, S>
+        for MAXPort<'a, CONFIG, SPI>
     where
-        SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-        EN: OutputPin<Error = P>,
+        SPI: SpiDevice<Error = S>,
+        S: Into<Error<S>>,
     {
         fn into_mode(
             self,
             config: ConfigMode~N,
-        ) -> Result<MAXPort<'a, ConfigMode~N, SPI, EN>, Error<S, P>> {
+        ) -> Result<MAXPort<'a, ConfigMode~N, SPI>, Error<S>> {
             self.max
                 .bus
                 .borrow_mut()
@@ -611,19 +606,19 @@ seq!(N in 0..=12 {
     }
 });
 
-impl<'a, SPI, EN, S, P> MAXPort<'a, ConfigMode5, SPI, EN>
+impl<'a, SPI, S> MAXPort<'a, ConfigMode5, SPI>
 where
-    SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-    EN: OutputPin<Error = P>,
+    SPI: SpiDevice<Error = S>,
+    S: Into<Error<S>>,
 {
-    pub fn set_value(&self, data: u16) -> Result<(), Error<S, P>> {
+    pub fn set_value(&self, data: u16) -> Result<(), Error<S>> {
         self.max
             .bus
             .borrow_mut()
             .write_register(REG_DAC_DATA + (self.port as u8), data)
     }
 
-    pub fn configure_range(&mut self, range: DACRANGE) -> Result<(), Error<S, P>> {
+    pub fn configure_range(&mut self, range: DACRANGE) -> Result<(), Error<S>> {
         self.config.0 = range;
         self.max
             .bus
@@ -632,19 +627,19 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P> MAXPort<'a, ConfigMode7, SPI, EN>
+impl<'a, SPI, S> MAXPort<'a, ConfigMode7, SPI>
 where
-    SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-    EN: OutputPin<Error = P>,
+    SPI: SpiDevice<Error = S>,
+    S: Into<Error<S>>,
 {
-    pub fn get_value(&self) -> Result<u16, Error<S, P>> {
+    pub fn get_value(&self) -> Result<u16, Error<S>> {
         self.max
             .bus
             .borrow_mut()
             .read_register(REG_ADC_DATA + (self.port as u8))
     }
 
-    pub fn configure_avr(&mut self, avr: AVR) -> Result<(), Error<S, P>> {
+    pub fn configure_avr(&mut self, avr: AVR) -> Result<(), Error<S>> {
         self.config.0 = avr;
         self.max
             .bus
@@ -653,7 +648,7 @@ where
         Ok(())
     }
 
-    pub fn configure_range(&mut self, range: ADCRANGE) -> Result<(), Error<S, P>> {
+    pub fn configure_range(&mut self, range: ADCRANGE) -> Result<(), Error<S>> {
         self.config.1 = range;
         self.max
             .bus
@@ -662,7 +657,7 @@ where
         Ok(())
     }
 
-    pub fn configure_nsamples(&mut self, nsamples: NSAMPLES) -> Result<(), Error<S, P>> {
+    pub fn configure_nsamples(&mut self, nsamples: NSAMPLES) -> Result<(), Error<S>> {
         self.config.2 = nsamples;
         self.max
             .bus
@@ -672,20 +667,20 @@ where
     }
 }
 
-pub struct Multiport<'a, CONFIG, SPI, EN, const N: usize> {
-    pub ports: [MAXPort<'a, CONFIG, SPI, EN>; N],
-    max: &'a MAX11300<SPI, EN>,
+pub struct Multiport<'a, CONFIG, SPI, const N: usize> {
+    pub ports: [MAXPort<'a, CONFIG, SPI>; N],
+    max: &'a MAX11300<SPI>,
 }
 
-impl<'a, CONFIG, SPI, EN, S, P, const N: usize> Multiport<'a, CONFIG, SPI, EN, N>
+impl<'a, CONFIG, SPI, S, const N: usize> Multiport<'a, CONFIG, SPI, N>
 where
-    SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-    EN: OutputPin<Error = P>,
+    SPI: SpiDevice<Error = S>,
+    S: Into<Error<S>>,
 {
     pub fn new(
-        ports: [MAXPort<'a, CONFIG, SPI, EN>; N],
-        max: &'a MAX11300<SPI, EN>,
-    ) -> Result<Self, Error<S, P>> {
+        ports: [MAXPort<'a, CONFIG, SPI>; N],
+        max: &'a MAX11300<SPI>,
+    ) -> Result<Self, Error<S>> {
         // Check if all the ports are in a row
         // We might weaken this requirement in the future and use the context based burst mode
         for neighbours in ports.windows(2) {
@@ -697,12 +692,12 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P, const N: usize> Multiport<'a, ConfigMode5, SPI, EN, N>
+impl<'a, SPI, S, const N: usize> Multiport<'a, ConfigMode5, SPI, N>
 where
-    SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-    EN: OutputPin<Error = P>,
+    SPI: SpiDevice<Error = S>,
+    S: Into<Error<S>>,
 {
-    pub fn set_values(&self, data: &[u16; N]) -> Result<(), Error<S, P>> {
+    pub fn set_values(&self, data: &[u16; N]) -> Result<(), Error<S>> {
         self.max
             .bus
             .borrow_mut()
@@ -710,12 +705,12 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P, const N: usize> Multiport<'a, ConfigMode7, SPI, EN, N>
+impl<'a, SPI, S, const N: usize> Multiport<'a, ConfigMode7, SPI, N>
 where
-    SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-    EN: OutputPin<Error = P>,
+    SPI: SpiDevice<Error = S>,
+    S: Into<Error<S>>,
 {
-    pub fn get_values(&self, buf: &'a mut [u16; N]) -> Result<&'a [u16], Error<S, P>> {
+    pub fn get_values(&self, buf: &'a mut [u16; N]) -> Result<&'a [u16], Error<S>> {
         self.max
             .bus
             .borrow_mut()
@@ -725,7 +720,7 @@ where
 
 pub struct Mode0Port(Port);
 
-pub trait IntoConfiguredPort<'a, CONFIG, SPI, EN, S, P> {
+pub trait IntoConfiguredPort<'a, CONFIG, SPI, S> {
     /// Configure a port for a certain mode
     /// # Arguments
     ///
@@ -734,7 +729,8 @@ pub trait IntoConfiguredPort<'a, CONFIG, SPI, EN, S, P> {
     ///
     /// # Example
     ///
-    /// ```
+    /// ```ignore
+    /// use max11300::{MAXPorts, MAX11300, ConfigMode5, DACRANGE, Error};
     /// let max_ports = MAXPorts::take().unwrap();
     /// let p0 = max_ports
     ///     .port0
@@ -745,23 +741,23 @@ pub trait IntoConfiguredPort<'a, CONFIG, SPI, EN, S, P> {
     fn into_configured_port(
         self,
         config: CONFIG,
-        max: &'a MAX11300<SPI, EN>,
-    ) -> Result<MAXPort<'a, CONFIG, SPI, EN>, Error<S, P>>;
+        max: &'a MAX11300<SPI>,
+    ) -> Result<MAXPort<'a, CONFIG, SPI>, Error<S>>;
 }
 
 seq!(N in 0..=12 {
-    impl<'a, SPI, EN, S, P> IntoConfiguredPort<'a, ConfigMode~N, SPI, EN, S, P>
+    impl<'a, SPI, S> IntoConfiguredPort<'a, ConfigMode~N, SPI, S>
         for Mode0Port
 
     where
-        SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-        EN: OutputPin<Error = P>,
+        SPI: SpiDevice<Error = S>,
+        S: Into<Error<S>>,
     {
         fn into_configured_port(
             self,
             config: ConfigMode~N,
-            max: &'a MAX11300<SPI, EN>,
-        ) -> Result<MAXPort<'a, ConfigMode~N, SPI, EN>, Error<S, P>> {
+            max: &'a MAX11300<SPI>,
+        ) -> Result<MAXPort<'a, ConfigMode~N, SPI>, Error<S>> {
             max.bus
                 .borrow_mut()
                 .write_register(self.0.as_config_addr(), config.as_u16())?;
@@ -837,36 +833,37 @@ impl MAXPorts {
     }
 }
 
-pub struct MAX11300<SPI, EN> {
+pub struct MAX11300<SPI> {
     pub config: DeviceConfig,
-    bus: RefCell<SPIBus<SPI, EN>>,
+    bus: RefCell<SPIBus<SPI>>,
 }
 
-impl<'a, SPI, EN, S, P> MAX11300<SPI, EN>
+impl<SPI, S> MAX11300<SPI>
 where
-    SPI: Transfer<u8, Error = S> + Write<u8, Error = S>,
-    EN: OutputPin<Error = P>,
+    SPI: SpiDevice<Error = S>,
+    S: Into<Error<S>>,
 {
     /// Initialize the MAX11300 device
     /// # Arguments
     ///
     /// * `spi` - embedded-hal compatible SPI instance
-    /// * `enable` - embedded-hal compatible GPIO pin
     /// * `config` - The MAX11300 device configuration struct
     ///
     /// # Example
     ///
-    /// ```
-    /// // Get `spi` and `enable` from your embedded-hal
+    /// ```ignore
+    /// use max11300::{MAX11300, DeviceConfig, DACREF, Error};
+
+    /// // Get `spi` from your embedded-hal
     /// let config = DeviceConfig {
     ///     // to enable the internal voltage reference for the DAC
     ///     dacref: DACREF::InternalRef,
     ///     ..DeviceConfig::default()
     /// };
-    /// let max = MAX11300::init(spi, enable, config).unwrap();
+    /// let max = MAX11300::init(spi, config).unwrap();
     /// ```
-    pub fn init(spi: SPI, enable: EN, config: DeviceConfig) -> Result<Self, Error<S, P>> {
-        let bus = RefCell::new(SPIBus::init(spi, enable)?);
+    pub fn init(spi: SPI, config: DeviceConfig) -> Result<Self, Error<S>> {
+        let bus = RefCell::new(SPIBus::init(spi)?);
         bus.borrow_mut()
             .write_register(REG_DEVICE_CTRL, config.as_u16())?;
 
@@ -874,7 +871,7 @@ where
     }
 
     /// Initialize the MAX11300 device. Equal to a power-cycle
-    pub fn reset(&mut self) -> Result<(), Error<S, P>> {
+    pub fn reset(&mut self) -> Result<(), Error<S>> {
         self.config = DeviceConfig::default();
         self.bus
             .borrow_mut()
@@ -885,10 +882,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use embedded_hal_mock::pin::{
-        Mock as PinMock, State as PinState, Transaction as PinTransaction,
-    };
-    use embedded_hal_mock::spi::{Mock as SpiMock, Transaction as SpiTransaction};
+    use embedded_hal_mock::eh1::spi::{Mock as SpiMock, Transaction as SpiTransaction};
 
     #[test]
     fn default_config() {
@@ -899,58 +893,45 @@ mod tests {
     #[test]
     fn init() {
         let config = DeviceConfig::default();
-        let mut spi = SpiMock::new([]);
-        let mut cs_pin = PinMock::new([]);
-        cs_pin.expect(&[
-            // Set high in the beginning
-            PinTransaction::set(PinState::High),
+        let expectations = [
             // connection check
-            PinTransaction::set(PinState::Low),
-            PinTransaction::set(PinState::High),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::transfer(vec![1], vec![0x04, 0x24]),
+            SpiTransaction::transaction_end(),
             // write default configuration
-            PinTransaction::set(PinState::Low),
-            PinTransaction::set(PinState::High),
-        ]);
-        spi.expect(&[
-            // connection check
-            SpiTransaction::transfer(vec![1, 0, 0], vec![0, 0x04, 0x24]),
-            // write default configuration
-            SpiTransaction::write(vec![0x10 << 1, 0, 0]),
-        ]);
-        MAX11300::init(spi, cs_pin, config).unwrap();
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write_vec(vec![0x10 << 1, 0, 0]),
+            SpiTransaction::transaction_end(),
+        ];
+        let mut spi = SpiMock::new(&expectations);
+        MAX11300::init(spi.clone(), config).unwrap();
+        spi.done();
     }
 
     #[test]
     fn configure_port() {
         let config = DeviceConfig::default();
-        let mut spi = SpiMock::new([]);
-        let mut cs_pin = PinMock::new([]);
-        cs_pin.expect(&[
-            // Set high in the beginning
-            PinTransaction::set(PinState::High),
+        let expectations = [
             // connection check
-            PinTransaction::set(PinState::Low),
-            PinTransaction::set(PinState::High),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::transfer(vec![1], vec![0x04, 0x24]),
+            SpiTransaction::transaction_end(),
             // write default configuration
-            PinTransaction::set(PinState::Low),
-            PinTransaction::set(PinState::High),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write_vec(vec![0x10 << 1, 0, 0]),
+            SpiTransaction::transaction_end(),
             // configure port
-            PinTransaction::set(PinState::Low),
-            PinTransaction::set(PinState::High),
-        ]);
-        spi.expect(&[
-            // connection check
-            SpiTransaction::transfer(vec![1, 0, 0], vec![0, 0x04, 0x24]),
-            // write default configuration
-            SpiTransaction::write(vec![0x10 << 1, 0, 0]),
-            // configure port
-            SpiTransaction::write(vec![0x25 << 1, 16, 0]),
-        ]);
-        let max = MAX11300::init(spi, cs_pin, config).unwrap();
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write_vec(vec![0x25 << 1, 16, 0]),
+            SpiTransaction::transaction_end(),
+        ];
+        let mut spi = SpiMock::new(&expectations);
+        let max = MAX11300::init(spi.clone(), config).unwrap();
         let max_ports = MAXPorts::take().unwrap();
         max_ports
             .port5
             .into_configured_port(ConfigMode1, &max)
             .unwrap();
+        spi.done();
     }
 }
