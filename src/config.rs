@@ -148,7 +148,7 @@ pub struct TMPCTL(u8, u8, u8);
 
 impl From<TMPCTL> for u16 {
     fn from(tmpctl: TMPCTL) -> Self {
-        (tmpctl.0 as u16) << 2 | (tmpctl.1 as u16) << 1 | tmpctl.0 as u16
+        (tmpctl.2 as u16) << 2 | (tmpctl.1 as u16) << 1 | tmpctl.0 as u16
     }
 }
 
