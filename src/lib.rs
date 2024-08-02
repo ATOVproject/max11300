@@ -175,11 +175,19 @@ where
     pub fn new(max: &'a WrappedDriver<SPI, EN>) -> Self {
         Self { max }
     }
+
     /// Read the Interrupts from the Interrupt register
     pub async fn read(&self) -> Result<Interrupts, Error<S, P>> {
         let mut driver = self.max.lock().await;
         let val = driver.read_register(REG_INTERRUPT).await?;
         Ok(Interrupts::from(val))
+    }
+
+    /// Read the raw Interrupts from the Interrupt register
+    pub async fn read_raw(&self) -> Result<u16, Error<S, P>> {
+        let mut driver = self.max.lock().await;
+        let val = driver.read_register(REG_INTERRUPT).await?;
+        Ok(val)
     }
 
     /// Read the GPI Status Interrupts from the GPIST register
