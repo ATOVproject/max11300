@@ -9,7 +9,10 @@ use embedded_hal_async::spi::SpiBus;
 use heapless::Vec;
 use seq_macro::seq;
 
-use config::{DeviceConfig, Port, DEVICE_ID, MAX_ADDRESS, REG_DEVICE_CTRL, REG_DEVICE_ID};
+use config::{
+    DeviceConfig, Interrupts, Port, DEVICE_ID, MAX_ADDRESS, REG_DEVICE_CTRL, REG_DEVICE_ID,
+    REG_GPI_STATUS, REG_INTERRUPT,
+};
 
 pub use port::{IntoConfiguredPort, IntoMode};
 pub use port::{MaxPort, Mode0Port, Multiport};
@@ -51,6 +54,7 @@ seq!(N in 0..20 {
                 #(
                     port~N: Mode0Port::new(Port::P~N, &self.max),
                 )*
+                interrupts: ReadInterrupts::new(&self.max)
             }
         }
 
@@ -159,6 +163,34 @@ where
     }
 }
 
+pub struct ReadInterrupts<'a, SPI, EN> {
+    max: &'a WrappedDriver<SPI, EN>,
+}
+
+impl<'a, SPI, EN, S, P> ReadInterrupts<'a, SPI, EN>
+where
+    SPI: SpiBus<Error = S>,
+    EN: OutputPin<Error = P>,
+{
+    pub fn new(max: &'a WrappedDriver<SPI, EN>) -> Self {
+        Self { max }
+    }
+    /// Read the Interrupts from the Interrupt register
+    pub async fn read(&self) -> Result<Interrupts, Error<S, P>> {
+        let mut driver = self.max.lock().await;
+        let val = driver.read_register(REG_INTERRUPT).await?;
+        Ok(Interrupts::from(val))
+    }
+
+    /// Read the GPI Status Interrupts from the GPIST register
+    pub async fn read_gpist(&self) -> Result<u32, Error<S, P>> {
+        let mut driver = self.max.lock().await;
+        let mut data = [0_u16; 2];
+        driver.read_registers(REG_GPI_STATUS, &mut data).await?;
+        Ok((data[0] as u32) << 16 | data[1] as u32)
+    }
+}
+
 seq!(N in 0..20 {
     pub struct Parts<'a, SPI, EN>
     where
@@ -168,6 +200,7 @@ seq!(N in 0..20 {
         #(
             pub port~N: Mode0Port<'a, SPI, EN>,
         )*
+        pub interrupts: ReadInterrupts<'a, SPI, EN>
     }
 });
 

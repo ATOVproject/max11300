@@ -7,6 +7,8 @@ pub const MAX_ADDRESS: u8 = 0x73;
 pub const REG_DEVICE_ID: u8 = 0x00;
 /// Interrupt Register
 pub const REG_INTERRUPT: u8 = 0x01;
+/// First GPI status register
+pub const REG_GPI_STATUS: u8 = 0x06;
 /// First GPO data register
 pub const REG_GPO_DATA: u8 = 0x0D;
 /// Device Control Register
