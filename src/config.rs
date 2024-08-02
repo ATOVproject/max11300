@@ -269,7 +269,21 @@ pub struct Interrupts {
     /// * Asserted when the DAC driver current exceeds approximately 50mA. The host can then read DACOIST[15:0] and DACOIST[19:16] to identify the port that caused the interrupt.
     /// * Cleared after the interrupt register is read, and after both DACOIST[15:0] and DACOIST[19:16] registers are read subsequently.
     pub dacoi: bool,
-    // FIXME: continue here
+    /// Internal temperature interrupts
+    /// * TMPINT[0]: Asserted when a new temperature value is available. Cleared after the interrupt register is read.
+    /// * TMPINT[1]: Asserted when the internal temperature value is lower than the value stored in TMPINTLO[11:0]. Cleared after the interrupt register is read.
+    /// * TMPINT[2]: Asserted when the internal temperature value is larger than the value stored in TMPINTHI[11:0]. Cleared after the interrupt register is read.
+    pub tmpint: (bool, bool, bool),
+    /// 1st external temperature interrupts
+    /// * TMPEXT1[0]: Asserted when a new temperature value is available. Cleared after the interrupt register is read
+    /// * TMPEXT1[1]: Asserted when the 1st external temperature value is lower than the value stored in TMPEXT1LO[11:0]. Cleared after the interrupt register is read.
+    /// * TMPEXT1[2]: Asserted when the 1st external temperature value is larger than the value stored in TMPEXT1HI[11:0]. Cleared after the interrupt register is read.
+    pub tmpext1: (bool, bool, bool),
+    /// 2nd external temperature interrupts
+    /// * TMPEXT2[0]: Asserted when a new temperature value is available. Cleared after the interrupt register is read
+    /// * TMPEXT2[1]: Asserted when the 2nd external temperature value is lower than the value stored in TMPEXT2LO[11:0]. Cleared after the interrupt register is read.
+    /// * TMPEXT2[2]: Asserted when the 2nd external temperature value is larger than the value stored in TMPEXT2HI[11:0]. Cleared after the interrupt register is read.
+    pub tmpext2: (bool, bool, bool),
     /// High-voltage supply monitor interrupt
     /// * Asserted when the high voltage supply (AVDDIO) falls below approximately 4V.
     /// * Cleared after the interrupt register is read
@@ -285,6 +299,21 @@ impl From<u16> for Interrupts {
             gpidr: int & (1 << 3) != 0,
             gpidm: int & (1 << 4) != 0,
             dacoi: int & (1 << 5) != 0,
+            tmpint: (
+                int & (1 << 6) != 0,
+                int & (1 << 7) != 0,
+                int & (1 << 8) != 0,
+            ),
+            tmpext1: (
+                int & (1 << 9) != 0,
+                int & (1 << 10) != 0,
+                int & (1 << 11) != 0,
+            ),
+            tmpext2: (
+                int & (1 << 12) != 0,
+                int & (1 << 13) != 0,
+                int & (1 << 14) != 0,
+            ),
             vmon: int & (1 << 15) != 0,
         }
     }
