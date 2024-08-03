@@ -207,6 +207,7 @@ pub struct DeviceConfig {
     pub rscancel: RSCANCEL,
     pub lpen: LPEN,
     pub brst: BRST,
+    pub mode_transition_delay: u32,
 }
 
 impl DeviceConfig {
@@ -237,6 +238,7 @@ impl Default for DeviceConfig {
             rscancel: RSCANCEL::Disabled,
             lpen: LPEN::Default,
             brst: BRST::Default,
+            mode_transition_delay: 5,
         }
     }
 }
