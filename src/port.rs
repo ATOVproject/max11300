@@ -1,5 +1,6 @@
 use core::future::Future;
 use embedded_hal::digital::OutputPin;
+use embedded_hal_async::delay::DelayNs;
 use embedded_hal_async::spi::SpiBus;
 use seq_macro::seq;
 
@@ -10,39 +11,41 @@ use crate::config::{
 };
 use crate::{Error, WrappedDriver};
 
-pub struct Mode0Port<'a, SPI, EN> {
+pub struct Mode0Port<'a, SPI, EN, D> {
     port: Port,
-    max: &'a WrappedDriver<SPI, EN>,
+    max: &'a WrappedDriver<SPI, EN, D>,
 }
 
-impl<'a, SPI, EN> Mode0Port<'a, SPI, EN>
+impl<'a, SPI, EN, D> Mode0Port<'a, SPI, EN, D>
 where
     SPI: SpiBus,
     EN: OutputPin,
+    D: DelayNs,
 {
-    pub(crate) fn new(port: Port, driver: &'a WrappedDriver<SPI, EN>) -> Self {
+    pub(crate) fn new(port: Port, driver: &'a WrappedDriver<SPI, EN, D>) -> Self {
         Self { port, max: driver }
     }
 }
 
-pub trait IntoConfiguredPort<'a, CONFIG, SPI: 'a, EN: 'a, S, P> {
+pub trait IntoConfiguredPort<'a, CONFIG, SPI: 'a, EN: 'a, D: 'a, S, P> {
     fn into_configured_port(
         self,
         config: CONFIG,
-    ) -> impl Future<Output = Result<MaxPort<'a, CONFIG, SPI, EN>, Error<S, P>>>;
+    ) -> impl Future<Output = Result<MaxPort<'a, CONFIG, SPI, EN, D>, Error<S, P>>>;
 }
 
 seq!(N in 0..=12 {
-    impl<'a, SPI, EN, S, P> IntoConfiguredPort<'a, ConfigMode~N, SPI, EN, S, P>
-        for Mode0Port<'a, SPI, EN>
+    impl<'a, SPI, EN, D, S, P> IntoConfiguredPort<'a, ConfigMode~N, SPI, EN, D, S, P>
+        for Mode0Port<'a, SPI, EN, D>
     where
         SPI: SpiBus<Error = S> + 'a,
         EN: OutputPin<Error = P>,
+        D: DelayNs,
     {
         async fn into_configured_port(
             self,
             config: ConfigMode~N,
-        ) -> Result<MaxPort<'a, ConfigMode~N, SPI, EN>, Error<S, P>> {
+        ) -> Result<MaxPort<'a, ConfigMode~N, SPI, EN, D>, Error<S, P>> {
             let mut locked_max = self.max.lock().await;
             locked_max.write_register(self.port.as_config_addr(), config.as_u16()).await?;
             Ok(MaxPort {
@@ -54,31 +57,34 @@ seq!(N in 0..=12 {
     }
 });
 
-pub struct MaxPort<'a, CONFIG, SPI, EN> {
+pub struct MaxPort<'a, CONFIG, SPI, EN, D> {
     config: CONFIG,
     port: Port,
-    max: &'a WrappedDriver<SPI, EN>,
+    max: &'a WrappedDriver<SPI, EN, D>,
 }
 
-pub trait IntoMode<'a, CONFIG, SPI: 'a, EN: 'a, S, P> {
+pub trait IntoMode<'a, CONFIG, SPI: 'a, EN: 'a, D: 'a, S, P> {
     fn into_mode(
         self,
         config: CONFIG,
-    ) -> impl Future<Output = Result<MaxPort<'a, CONFIG, SPI, EN>, Error<S, P>>>;
+    ) -> impl Future<Output = Result<MaxPort<'a, CONFIG, SPI, EN, D>, Error<S, P>>>;
 }
 
 seq!(N in 0..=12 {
-    impl<'a, CONFIG, SPI, EN, S, P> IntoMode<'a, ConfigMode~N, SPI, EN, S, P>
-        for MaxPort<'a, CONFIG, SPI, EN>
+    impl<'a, CONFIG, SPI, EN, D, S, P> IntoMode<'a, ConfigMode~N, SPI, EN, D, S, P>
+        for MaxPort<'a, CONFIG, SPI, EN, D>
     where
         SPI: SpiBus<Error = S> + 'a,
         EN: OutputPin<Error = P>,
+        D: DelayNs,
     {
         async fn into_mode(
             self,
             config: ConfigMode~N,
-        ) -> Result<MaxPort<'a, ConfigMode~N, SPI, EN>, Error<S, P>> {
+        ) -> Result<MaxPort<'a, ConfigMode~N, SPI, EN, D>, Error<S, P>> {
             let mut driver = self.max.lock().await;
+            let delay = driver.config.mode_transition_delay;
+            driver.delay.delay_ms(delay).await;
             driver.write_register(self.port.as_config_addr(), config.as_u16()).await?;
             Ok(MaxPort {
                 config,
@@ -89,18 +95,20 @@ seq!(N in 0..=12 {
     }
 });
 
-impl<'a, SPI, EN, S, P> MaxPort<'a, ConfigMode0, SPI, EN>
+impl<'a, SPI, EN, D, S, P> MaxPort<'a, ConfigMode0, SPI, EN, D>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
     // High impedance mode. Nothing can be done here.
 }
 
-impl<'a, SPI, EN, S, P> MaxPort<'a, ConfigMode1, SPI, EN>
+impl<'a, SPI, EN, D, S, P> MaxPort<'a, ConfigMode1, SPI, EN, D>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
     /// Configure the value of the interrupt threshold and edge detection on this port
     pub async fn configure_threshold(
@@ -127,10 +135,11 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P> MaxPort<'a, ConfigMode3, SPI, EN>
+impl<'a, SPI, EN, D, S, P> MaxPort<'a, ConfigMode3, SPI, EN, D>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
     /// Configure the output level of the DAC when the port is set high
     pub async fn configure_level(&self, level: u16) -> Result<(), Error<S, P>> {
@@ -180,10 +189,11 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P> MaxPort<'a, ConfigMode5, SPI, EN>
+impl<'a, SPI, EN, D, S, P> MaxPort<'a, ConfigMode5, SPI, EN, D>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
     /// Set the DAC output value
     pub async fn set_value(&self, data: u16) -> Result<(), Error<S, P>> {
@@ -203,10 +213,11 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P> MaxPort<'a, ConfigMode6, SPI, EN>
+impl<'a, SPI, EN, D, S, P> MaxPort<'a, ConfigMode6, SPI, EN, D>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
     /// Set the DAC output value
     pub async fn set_value(&self, data: u16) -> Result<(), Error<S, P>> {
@@ -241,10 +252,11 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P> MaxPort<'a, ConfigMode7, SPI, EN>
+impl<'a, SPI, EN, D, S, P> MaxPort<'a, ConfigMode7, SPI, EN, D>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
     /// Get the current value of the ADC
     pub async fn get_value(&self) -> Result<u16, Error<S, P>> {
@@ -280,16 +292,17 @@ where
     }
 }
 
-pub struct Multiport<'a, CONFIG, SPI, EN, const N: usize> {
-    pub ports: [MaxPort<'a, CONFIG, SPI, EN>; N],
+pub struct Multiport<'a, CONFIG, SPI, EN, D, const N: usize> {
+    pub ports: [MaxPort<'a, CONFIG, SPI, EN, D>; N],
 }
 
-impl<'a, CONFIG, SPI, EN, S, P, const N: usize> Multiport<'a, CONFIG, SPI, EN, N>
+impl<'a, CONFIG, SPI, EN, D, S, P, const N: usize> Multiport<'a, CONFIG, SPI, EN, D, N>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
-    pub fn new(ports: [MaxPort<'a, CONFIG, SPI, EN>; N]) -> Result<Self, Error<S, P>> {
+    pub fn new(ports: [MaxPort<'a, CONFIG, SPI, EN, D>; N]) -> Result<Self, Error<S, P>> {
         // Check if all the ports are in a row
         // We might weaken this requirement in the future and use the context based burst mode
         for neighbours in ports.windows(2) {
@@ -301,10 +314,11 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P, const N: usize> Multiport<'a, ConfigMode5, SPI, EN, N>
+impl<'a, SPI, EN, D, S, P, const N: usize> Multiport<'a, ConfigMode5, SPI, EN, D, N>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
     /// Set the DAC output values for all owned ports
     pub async fn set_values(&mut self, data: &[u16; N]) -> Result<(), Error<S, P>> {
@@ -316,10 +330,11 @@ where
     }
 }
 
-impl<'a, SPI, EN, S, P, const N: usize> Multiport<'a, ConfigMode7, SPI, EN, N>
+impl<'a, SPI, EN, D, S, P, const N: usize> Multiport<'a, ConfigMode7, SPI, EN, D, N>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
     /// Get the current values of the ADC for all owned ports
     pub async fn get_values(&mut self, buf: &'a mut [u16; N]) -> Result<&'a [u16], Error<S, P>> {

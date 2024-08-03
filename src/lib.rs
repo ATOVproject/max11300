@@ -5,7 +5,7 @@ mod port;
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embedded_hal::digital::OutputPin;
-use embedded_hal_async::spi::SpiBus;
+use embedded_hal_async::{delay::DelayNs, spi::SpiBus};
 use heapless::Vec;
 use seq_macro::seq;
 
@@ -31,25 +31,26 @@ pub enum Error<S, P> {
     Port,
 }
 
-pub type WrappedDriver<SPI, EN> = Mutex<CriticalSectionRawMutex, MaxDriver<SPI, EN>>;
+pub type WrappedDriver<SPI, EN, D> = Mutex<CriticalSectionRawMutex, MaxDriver<SPI, EN, D>>;
 
-pub struct Max11300<SPI, EN> {
-    max: WrappedDriver<SPI, EN>,
+pub struct Max11300<SPI, EN, D> {
+    max: WrappedDriver<SPI, EN, D>,
     config: DeviceConfig,
 }
 
 seq!(N in 0..20 {
-    impl<SPI, EN, S, P> Max11300<SPI, EN>
+    impl<SPI, EN, S, P, D> Max11300<SPI, EN, D>
     where
         SPI: SpiBus<Error = S>,
         EN: OutputPin<Error = P>,
+        D: DelayNs,
     {
-        pub async fn new(spi: SPI, enable: EN, config: DeviceConfig) -> Result<Self, Error<S, P>> {
-            let max = MaxDriver::try_new(spi, enable, config).await?;
+        pub async fn new(spi: SPI, enable: EN, delay: D, config: DeviceConfig) -> Result<Self, Error<S, P>> {
+            let max = MaxDriver::try_new(spi, enable, delay, config).await?;
             Ok(Self { max: Mutex::new(max), config })
         }
 
-        pub fn split(&mut self) -> Parts<'_, SPI, EN> {
+        pub fn split(&mut self) -> Parts<'_, SPI, EN, D> {
             Parts {
                 #(
                     port~N: Mode0Port::new(Port::P~N, &self.max),
@@ -65,19 +66,32 @@ seq!(N in 0..20 {
     }
 });
 
-pub struct MaxDriver<SPI, EN> {
+pub struct MaxDriver<SPI, EN, D> {
     enable: EN,
     spi: SPI,
+    delay: D,
+    config: DeviceConfig,
 }
 
-impl<SPI, EN, S, P> MaxDriver<SPI, EN>
+impl<SPI, EN, D, S, P> MaxDriver<SPI, EN, D>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
-    async fn try_new(spi: SPI, mut enable: EN, config: DeviceConfig) -> Result<Self, Error<S, P>> {
+    async fn try_new(
+        spi: SPI,
+        mut enable: EN,
+        delay: D,
+        config: DeviceConfig,
+    ) -> Result<Self, Error<S, P>> {
         enable.set_high().map_err(Error::Pin)?;
-        let mut max = Self { enable, spi };
+        let mut max = Self {
+            config,
+            delay,
+            enable,
+            spi,
+        };
         if max.read_register(REG_DEVICE_ID).await? != DEVICE_ID {
             return Err(Error::Conn);
         }
@@ -163,16 +177,17 @@ where
     }
 }
 
-pub struct ReadInterrupts<'a, SPI, EN> {
-    max: &'a WrappedDriver<SPI, EN>,
+pub struct ReadInterrupts<'a, SPI, EN, D> {
+    max: &'a WrappedDriver<SPI, EN, D>,
 }
 
-impl<'a, SPI, EN, S, P> ReadInterrupts<'a, SPI, EN>
+impl<'a, SPI, EN, D, S, P> ReadInterrupts<'a, SPI, EN, D>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    D: DelayNs,
 {
-    pub fn new(max: &'a WrappedDriver<SPI, EN>) -> Self {
+    pub fn new(max: &'a WrappedDriver<SPI, EN, D>) -> Self {
         Self { max }
     }
 
@@ -200,15 +215,16 @@ where
 }
 
 seq!(N in 0..20 {
-    pub struct Parts<'a, SPI, EN>
+    pub struct Parts<'a, SPI, EN, D>
     where
         SPI: SpiBus + 'a,
         EN: OutputPin,
+        D: DelayNs,
     {
         #(
-            pub port~N: Mode0Port<'a, SPI, EN>,
+            pub port~N: Mode0Port<'a, SPI, EN, D>,
         )*
-        pub interrupts: ReadInterrupts<'a, SPI, EN>
+        pub interrupts: ReadInterrupts<'a, SPI, EN, D>
     }
 });
 
@@ -220,13 +236,15 @@ mod tests {
     };
 
     use super::*;
-    use embedded_hal_mock::eh1::pin::{
+    use embedded_hal_mock::eh1::delay::NoopDelay;
+    use embedded_hal_mock::eh1::digital::{
         Mock as PinMock, State as PinState, Transaction as PinTransaction,
     };
     use embedded_hal_mock::eh1::spi::{Mock as SpiMock, Transaction as SpiTransaction};
 
     #[tokio::test]
     async fn into_configured() {
+        let delay = NoopDelay::new();
         let config = DeviceConfig::default();
         let pin_expectations = [
             PinTransaction::set(PinState::High),
@@ -243,7 +261,7 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let _max = Max11300::new(spi.clone(), pin.clone(), config)
+        let _max = Max11300::new(spi.clone(), pin.clone(), delay, config)
             .await
             .unwrap();
         pin.done();
@@ -252,6 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn config_modes() {
+        let delay = NoopDelay::new();
         let config = DeviceConfig::default();
         let pin_expectations = [
             PinTransaction::set(PinState::High),
@@ -276,7 +295,7 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let mut max = Max11300::new(spi.clone(), pin.clone(), config)
+        let mut max = Max11300::new(spi.clone(), pin.clone(), delay, config)
             .await
             .unwrap();
         let ports = max.split();
@@ -297,6 +316,7 @@ mod tests {
 
     #[tokio::test]
     async fn config_mode_5() {
+        let delay = NoopDelay::new();
         let config = DeviceConfig::default();
         let pin_expectations = [
             PinTransaction::set(PinState::High),
@@ -321,7 +341,7 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let mut max = Max11300::new(spi.clone(), pin.clone(), config)
+        let mut max = Max11300::new(spi.clone(), pin.clone(), delay, config)
             .await
             .unwrap();
         let ports = max.split();
@@ -337,6 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn config_mode_7() {
+        let delay = NoopDelay::new();
         let config = DeviceConfig::default();
         let pin_expectations = [
             PinTransaction::set(PinState::High),
@@ -361,7 +382,7 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let mut max = Max11300::new(spi.clone(), pin.clone(), config)
+        let mut max = Max11300::new(spi.clone(), pin.clone(), delay, config)
             .await
             .unwrap();
         let ports = max.split();
@@ -382,6 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiport() {
+        let delay = NoopDelay::new();
         let config = DeviceConfig::default();
         let pin_expectations = [
             PinTransaction::set(PinState::High),
@@ -409,7 +431,7 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let mut max = Max11300::new(spi.clone(), pin.clone(), config)
+        let mut max = Max11300::new(spi.clone(), pin.clone(), delay, config)
             .await
             .unwrap();
         let ports = max.split();
