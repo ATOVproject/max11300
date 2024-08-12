@@ -1,3 +1,5 @@
+use crate::Error;
+
 /// Static device id
 pub const DEVICE_ID: u16 = 0x0424;
 /// Highest addressable register address
@@ -76,6 +78,39 @@ impl Port {
     }
     pub fn as_u16(&self) -> u16 {
         *self as u16
+    }
+    pub fn as_usize(&self) -> usize {
+        *self as usize
+    }
+}
+
+impl TryFrom<usize> for Port {
+    type Error = Error<(), ()>;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Port::P0),
+            1 => Ok(Port::P1),
+            2 => Ok(Port::P2),
+            3 => Ok(Port::P3),
+            4 => Ok(Port::P4),
+            5 => Ok(Port::P5),
+            6 => Ok(Port::P6),
+            7 => Ok(Port::P7),
+            8 => Ok(Port::P8),
+            9 => Ok(Port::P9),
+            10 => Ok(Port::P10),
+            11 => Ok(Port::P11),
+            12 => Ok(Port::P12),
+            13 => Ok(Port::P13),
+            14 => Ok(Port::P14),
+            15 => Ok(Port::P15),
+            16 => Ok(Port::P16),
+            17 => Ok(Port::P17),
+            18 => Ok(Port::P18),
+            19 => Ok(Port::P19),
+            _ => Err(Error::Port),
+        }
     }
 }
 
