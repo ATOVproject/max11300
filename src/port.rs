@@ -6,7 +6,7 @@ use seq_macro::seq;
 use crate::config::{
     ConfigMode0, ConfigMode1, ConfigMode10, ConfigMode11, ConfigMode12, ConfigMode2, ConfigMode3,
     ConfigMode4, ConfigMode5, ConfigMode6, ConfigMode7, ConfigMode8, ConfigMode9, Port, ADCRANGE,
-    AVR, DACRANGE, GPIMD, NSAMPLES, REG_ADC_DATA, REG_DAC_DATA, REG_GPO_DATA, REG_IRQ_MODE,
+    AVR, DACRANGE, GPIMD, NSAMPLES, REG_ADC_DATA, REG_DAC_DATA,
 };
 use crate::{Error, WrappedDriver};
 
@@ -109,20 +109,8 @@ where
         mode: GPIMD,
     ) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
-        // Set IRQ mode for port
-        let pos = self.port as usize % 8 * 2;
-        let mut current = driver
-            .read_register(REG_IRQ_MODE + (self.port as u8 / 3))
-            .await?;
-        let mut next = (mode as u16) << pos;
-        current &= !(0b11 << pos);
-        next |= current;
         driver
-            .write_register(REG_IRQ_MODE + (self.port as u8 / 3), next)
-            .await?;
-        // Set threshold for port
-        driver
-            .write_register(REG_DAC_DATA + (self.port as u8), threshold)
+            .gpi_configure_threshold(self.port, threshold, mode)
             .await
     }
 }
@@ -135,48 +123,25 @@ where
     /// Configure the output level of the DAC when the port is set high
     pub async fn configure_level(&self, level: u16) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
-        driver
-            .write_register(REG_DAC_DATA + (self.port as u8), level)
-            .await
+        driver.gpo_configure_level(self.port, level).await
     }
 
     /// Set the port output high (to previously configured level)
     pub async fn set_high(&self) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
-        let current = driver
-            .read_register(REG_GPO_DATA + (self.port as u8 / 2))
-            .await?;
-        let pos = self.port as usize % 16;
-        let next = current | (1 << pos);
-        driver
-            .write_register(REG_GPO_DATA + (self.port as u8), next)
-            .await
+        driver.gpo_set_high(self.port).await
     }
 
     /// Set the port output low (zero)
     pub async fn set_low(&self) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
-        let current = driver
-            .read_register(REG_GPO_DATA + (self.port as u8 / 2))
-            .await?;
-        let pos = self.port as usize % 16;
-        let next = current & !(1 << pos);
-        driver
-            .write_register(REG_GPO_DATA + (self.port as u8), next)
-            .await
+        driver.gpo_set_low(self.port).await
     }
 
     /// Toggle the port output
     pub async fn toggle(&self) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
-        let current = driver
-            .read_register(REG_GPO_DATA + (self.port as u8 / 2))
-            .await?;
-        let pos = self.port as usize % 16;
-        let next = current ^ (1 << pos);
-        driver
-            .write_register(REG_GPO_DATA + (self.port as u8), next)
-            .await
+        driver.gpo_toggle(self.port).await
     }
 }
 
@@ -188,18 +153,14 @@ where
     /// Set the DAC output value
     pub async fn set_value(&self, data: u16) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
-        driver
-            .write_register(REG_DAC_DATA + (self.port as u8), data)
-            .await
+        driver.dac_set_value(self.port, data).await
     }
 
     /// Configure the analog voltage range for the DAC
     pub async fn configure_range(&mut self, range: DACRANGE) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
         self.config.0 = range;
-        driver
-            .write_register(self.port.as_config_addr(), self.config.as_u16())
-            .await
+        driver.configure_port(self.port, self.config.as_u16()).await
     }
 }
 
@@ -211,33 +172,27 @@ where
     /// Set the DAC output value
     pub async fn set_value(&self, data: u16) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
-        driver
-            .write_register(REG_DAC_DATA + (self.port as u8), data)
-            .await
+        driver.dac_set_value(self.port, data).await
     }
 
     /// Configure the analog voltage reference for the ADC
     pub async fn configure_avr(&mut self, avr: AVR) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
         self.config.0 = avr;
-        driver
-            .write_register(self.port.as_config_addr(), self.config.as_u16())
-            .await
+        driver.configure_port(self.port, self.config.as_u16()).await
     }
 
     /// Configure the analog voltage range for the DAC
     pub async fn configure_range(&mut self, range: DACRANGE) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
         self.config.1 = range;
-        driver
-            .write_register(self.port.as_config_addr(), self.config.as_u16())
-            .await
+        driver.configure_port(self.port, self.config.as_u16()).await
     }
 
     /// Get the current value of the ADC (monitoring the DAC)
     pub async fn get_value(&self) -> Result<u16, Error<S, P>> {
         let mut driver = self.max.lock().await;
-        driver.read_register(REG_ADC_DATA + (self.port as u8)).await
+        driver.adc_get_value(self.port).await
     }
 }
 
@@ -249,34 +204,28 @@ where
     /// Get the current value of the ADC
     pub async fn get_value(&self) -> Result<u16, Error<S, P>> {
         let mut driver = self.max.lock().await;
-        driver.read_register(REG_ADC_DATA + (self.port as u8)).await
+        driver.adc_get_value(self.port).await
     }
 
     /// Configure the analog voltage reference for the ADC
     pub async fn configure_avr(&mut self, avr: AVR) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
         self.config.0 = avr;
-        driver
-            .write_register(self.port.as_config_addr(), self.config.as_u16())
-            .await
+        driver.configure_port(self.port, self.config.as_u16()).await
     }
 
     /// Configure the analog voltage range for the ADC
     pub async fn configure_range(&mut self, range: ADCRANGE) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
         self.config.1 = range;
-        driver
-            .write_register(self.port.as_config_addr(), self.config.as_u16())
-            .await
+        driver.configure_port(self.port, self.config.as_u16()).await
     }
 
     /// Configure the number of samples to take and average over
     pub async fn configure_nsamples(&mut self, nsamples: NSAMPLES) -> Result<(), Error<S, P>> {
         let mut driver = self.max.lock().await;
         self.config.2 = nsamples;
-        driver
-            .write_register(self.port.as_config_addr(), self.config.as_u16())
-            .await
+        driver.configure_port(self.port, self.config.as_u16()).await
     }
 }
 
