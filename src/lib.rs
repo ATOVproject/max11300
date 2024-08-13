@@ -5,7 +5,8 @@ mod port;
 
 use core::future::Future;
 
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::RawMutex;
+use embassy_sync::mutex::Mutex;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::spi::SpiBus;
 use heapless::Vec;
@@ -32,8 +33,6 @@ pub enum Error<S, P> {
     Mode,
 }
 
-pub type WrappedDriver<SPI, EN> = Mutex<CriticalSectionRawMutex, MaxDriver<SPI, EN>>;
-
 pub trait ConfigurePort<CONFIG, S, P> {
     fn configure_port(
         &mut self,
@@ -45,134 +44,113 @@ pub trait ConfigurePort<CONFIG, S, P> {
 pub struct Max11300<SPI, EN> {
     channel_config: [u16; 20],
     config: DeviceConfig,
-    max: WrappedDriver<SPI, EN>,
-}
-
-seq!(N in 0..20 {
-    impl<SPI, EN, S, P> Max11300<SPI, EN>
-    where
-        SPI: SpiBus<Error = S>,
-        EN: OutputPin<Error = P>,
-    {
-        pub async fn new(spi: SPI, enable: EN, config: DeviceConfig) -> Result<Self, Error<S, P>> {
-            let max = MaxDriver::try_new(spi, enable, config).await?;
-            Ok(Self { channel_config: [0; 20], config, max: Mutex::new(max) })
-        }
-
-        pub fn split(&mut self) -> Parts<'_, SPI, EN> {
-            Parts {
-                #(
-                    port~N: Mode0Port::new(Port::P~N, &self.max),
-                )*
-                interrupts: ReadInterrupts::new(&self.max)
-            }
-        }
-
-        pub fn config(&self) -> DeviceConfig {
-            self.config
-        }
-
-        pub async fn gpi_configure_threshold(
-            &mut self,
-            port: Port,
-            threshold: u16,
-            mode: GPIMD,
-        ) -> Result<(), Error<S, P>> {
-            if !self.is_mode(port, 1) {
-                return Err(Error::Mode);
-            }
-            let mut driver = self.max.lock().await;
-            driver.gpi_configure_threshold(port, threshold, mode).await
-        }
-
-        pub async fn gpo_configure_level(&mut self, port: Port, level: u16) -> Result<(), Error<S, P>> {
-            if !self.is_mode(port, 3) {
-                return Err(Error::Mode);
-            }
-            let mut driver = self.max.lock().await;
-            driver.gpo_configure_level(port, level).await
-        }
-
-        pub async fn gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
-            if !self.is_mode(port, 3) {
-                return Err(Error::Mode);
-            }
-            let mut driver = self.max.lock().await;
-            driver.gpo_set_high(port).await
-        }
-
-        pub async fn gpo_set_low(&mut self, port: Port) -> Result<(), Error<S, P>> {
-            if !self.is_mode(port, 3) {
-                return Err(Error::Mode);
-            }
-            let mut driver = self.max.lock().await;
-            driver.gpo_set_low(port).await
-        }
-
-        pub async fn gpo_toggle(&mut self, port: Port) -> Result<(), Error<S, P>> {
-            if !self.is_mode(port, 3) {
-                return Err(Error::Mode);
-            }
-            let mut driver = self.max.lock().await;
-            driver.gpo_toggle(port).await
-        }
-
-        pub async fn dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
-            if !self.is_mode(port, 5) {
-                return Err(Error::Mode);
-            }
-            let mut driver = self.max.lock().await;
-            driver.dac_set_value(port, data).await
-        }
-
-        pub async fn adc_get_value(&mut self, port: Port) -> Result<u16, Error<S, P>> {
-            if !self.is_mode(port, 6) {
-                return Err(Error::Mode);
-            }
-            let mut driver = self.max.lock().await;
-            driver.adc_get_value(port).await
-        }
-
-        fn is_mode(&self, port: Port, mode: u8) -> bool {
-            ((self.channel_config[port.as_usize()] >> 12) & 0xf) as u8 == mode
-        }
-    }
-});
-
-seq!(N in 0..=12 {
-    impl<SPI, EN, S, P> ConfigurePort<ConfigMode~N, S, P> for Max11300<SPI, EN>
-    where
-        SPI: SpiBus<Error = S>,
-        EN: OutputPin<Error = P>,
-    {
-        async fn configure_port(&mut self, port: Port, config: ConfigMode~N) -> Result<(), Error<S, P>> {
-            let mut driver = self.max.lock().await;
-            let cfg = config.as_u16();
-            driver.configure_port(port, config.as_u16()).await?;
-            self.channel_config[port.as_usize()] = cfg;
-            Ok(())
-        }
-    }
-});
-
-pub struct MaxDriver<SPI, EN> {
     enable: EN,
     spi: SPI,
 }
 
-impl<SPI, EN, S, P> MaxDriver<SPI, EN>
+impl<SPI, EN, S, P> Max11300<SPI, EN>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
 {
-    async fn try_new(spi: SPI, mut enable: EN, config: DeviceConfig) -> Result<Self, Error<S, P>> {
+    pub async fn try_new(
+        spi: SPI,
+        mut enable: EN,
+        config: DeviceConfig,
+    ) -> Result<Self, Error<S, P>> {
         enable.set_high().map_err(Error::Pin)?;
-        let mut max = Self { enable, spi };
+        let mut max = Self {
+            channel_config: [0; 20],
+            config,
+            enable,
+            spi,
+        };
         if max.read_register(REG_DEVICE_ID).await? != DEVICE_ID {
             return Err(Error::Conn);
         }
         max.write_register(REG_DEVICE_CTRL, config.as_u16()).await?;
         Ok(max)
+    }
+
+    pub fn config(&self) -> DeviceConfig {
+        self.config
+    }
+
+    pub async fn gpi_configure_threshold(
+        &mut self,
+        port: Port,
+        threshold: u16,
+        mode: GPIMD,
+    ) -> Result<(), Error<S, P>> {
+        if !self.is_mode(port, 1) {
+            return Err(Error::Mode);
+        }
+        self._gpi_configure_threshold(port, threshold, mode).await
+    }
+
+    pub async fn gpo_configure_level(&mut self, port: Port, level: u16) -> Result<(), Error<S, P>> {
+        if !self.is_mode(port, 3) {
+            return Err(Error::Mode);
+        }
+        self._gpo_configure_level(port, level).await
+    }
+
+    pub async fn gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
+        if !self.is_mode(port, 3) {
+            return Err(Error::Mode);
+        }
+        self._gpo_set_high(port).await
+    }
+
+    pub async fn gpo_set_low(&mut self, port: Port) -> Result<(), Error<S, P>> {
+        if !self.is_mode(port, 3) {
+            return Err(Error::Mode);
+        }
+        self._gpo_set_low(port).await
+    }
+
+    pub async fn gpo_toggle(&mut self, port: Port) -> Result<(), Error<S, P>> {
+        if !self.is_mode(port, 3) {
+            return Err(Error::Mode);
+        }
+        self._gpo_toggle(port).await
+    }
+
+    pub async fn dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
+        if !self.is_mode(port, 5) {
+            return Err(Error::Mode);
+        }
+        self._dac_set_value(port, data).await
+    }
+
+    pub async fn adc_get_value(&mut self, port: Port) -> Result<u16, Error<S, P>> {
+        if !self.is_mode(port, 6) {
+            return Err(Error::Mode);
+        }
+        self._adc_get_value(port).await
+    }
+
+    /// Read the Interrupts from the Interrupt register
+    pub async fn int_read(&mut self) -> Result<Interrupts, Error<S, P>> {
+        let val = self.read_register(REG_INTERRUPT).await?;
+        Ok(Interrupts::from(val))
+    }
+
+    /// Read the raw Interrupts from the Interrupt register
+    pub async fn int_read_raw(&mut self) -> Result<u16, Error<S, P>> {
+        let val = self.read_register(REG_INTERRUPT).await?;
+        Ok(val)
+    }
+
+    /// Read the GPI Status Interrupts from the GPIST register
+    pub async fn int_read_gpist(&mut self) -> Result<u32, Error<S, P>> {
+        let mut data = [0_u16; 2];
+        self.read_registers(REG_GPI_STATUS, &mut data).await?;
+        Ok((data[0] as u32) << 16 | data[1] as u32)
+    }
+
+    fn is_mode(&self, port: Port, mode: u8) -> bool {
+        ((self.channel_config[port.as_usize()] >> 12) & 0xf) as u8 == mode
     }
 
     async fn read_register(&mut self, address: u8) -> Result<u16, Error<S, P>> {
@@ -252,7 +230,11 @@ where
         Ok(())
     }
 
-    async fn gpi_configure_threshold(
+    async fn _configure_port(&mut self, port: Port, config: u16) -> Result<(), Error<S, P>> {
+        self.write_register(port.as_config_addr(), config).await
+    }
+
+    async fn _gpi_configure_threshold(
         &mut self,
         port: Port,
         threshold: u16,
@@ -271,91 +253,113 @@ where
             .await
     }
 
-    async fn gpo_configure_level(&mut self, port: Port, level: u16) -> Result<(), Error<S, P>> {
+    async fn _gpo_configure_level(&mut self, port: Port, level: u16) -> Result<(), Error<S, P>> {
         self.write_register(REG_DAC_DATA + (port as u8), level)
             .await
     }
 
-    async fn gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
+    async fn _gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
         let current = self.read_register(REG_GPO_DATA + (port as u8 / 2)).await?;
         let pos = port as usize % 16;
         let next = current | (1 << pos);
         self.write_register(REG_GPO_DATA + (port as u8), next).await
     }
 
-    async fn gpo_set_low(&mut self, port: Port) -> Result<(), Error<S, P>> {
+    async fn _gpo_set_low(&mut self, port: Port) -> Result<(), Error<S, P>> {
         let current = self.read_register(REG_GPO_DATA + (port as u8 / 2)).await?;
         let pos = port as usize % 16;
         let next = current & !(1 << pos);
         self.write_register(REG_GPO_DATA + (port as u8), next).await
     }
 
-    async fn gpo_toggle(&mut self, port: Port) -> Result<(), Error<S, P>> {
+    async fn _gpo_toggle(&mut self, port: Port) -> Result<(), Error<S, P>> {
         let current = self.read_register(REG_GPO_DATA + (port as u8 / 2)).await?;
         let pos = port as usize % 16;
         let next = current ^ (1 << pos);
         self.write_register(REG_GPO_DATA + (port as u8), next).await
     }
 
-    async fn dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
+    async fn _dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
         self.write_register(REG_DAC_DATA + (port as u8), data).await
     }
 
-    async fn adc_get_value(&mut self, port: Port) -> Result<u16, Error<S, P>> {
+    async fn _adc_get_value(&mut self, port: Port) -> Result<u16, Error<S, P>> {
         self.read_register(REG_ADC_DATA + (port as u8)).await
     }
+}
 
-    async fn configure_port(&mut self, port: Port, config: u16) -> Result<(), Error<S, P>> {
-        self.write_register(port.as_config_addr(), config).await
+seq!(N in 0..=12 {
+    impl<SPI, EN, S, P> ConfigurePort<ConfigMode~N, S, P> for Max11300<SPI, EN>
+    where
+        SPI: SpiBus<Error = S>,
+        EN: OutputPin<Error = P>,
+    {
+        async fn configure_port(&mut self, port: Port, config: ConfigMode~N) -> Result<(), Error<S, P>> {
+            let cfg = config.as_u16();
+            self._configure_port(port, config.as_u16()).await?;
+            self.channel_config[port.as_usize()] = cfg;
+            Ok(())
+        }
     }
+});
+
+pub struct ReadInterrupts<SPI: 'static, EN: 'static, M: RawMutex + 'static> {
+    max: &'static Mutex<M, Max11300<SPI, EN>>,
 }
 
-pub struct ReadInterrupts<'a, SPI, EN> {
-    max: &'a WrappedDriver<SPI, EN>,
-}
-
-impl<'a, SPI, EN, S, P> ReadInterrupts<'a, SPI, EN>
+impl<SPI, EN, M, S, P> ReadInterrupts<SPI, EN, M>
 where
     SPI: SpiBus<Error = S>,
     EN: OutputPin<Error = P>,
+    M: RawMutex,
 {
-    pub fn new(max: &'a WrappedDriver<SPI, EN>) -> Self {
+    pub fn new(max: &'static Mutex<M, Max11300<SPI, EN>>) -> Self {
         Self { max }
     }
 
     /// Read the Interrupts from the Interrupt register
     pub async fn read(&self) -> Result<Interrupts, Error<S, P>> {
         let mut driver = self.max.lock().await;
-        let val = driver.read_register(REG_INTERRUPT).await?;
-        Ok(Interrupts::from(val))
+        driver.int_read().await
     }
 
     /// Read the raw Interrupts from the Interrupt register
     pub async fn read_raw(&self) -> Result<u16, Error<S, P>> {
         let mut driver = self.max.lock().await;
-        let val = driver.read_register(REG_INTERRUPT).await?;
-        Ok(val)
+        driver.int_read_raw().await
     }
 
     /// Read the GPI Status Interrupts from the GPIST register
     pub async fn read_gpist(&self) -> Result<u32, Error<S, P>> {
         let mut driver = self.max.lock().await;
-        let mut data = [0_u16; 2];
-        driver.read_registers(REG_GPI_STATUS, &mut data).await?;
-        Ok((data[0] as u32) << 16 | data[1] as u32)
+        driver.int_read_gpist().await
     }
 }
 
 seq!(N in 0..20 {
-    pub struct Parts<'a, SPI, EN>
-    where
-        SPI: SpiBus + 'a,
-        EN: OutputPin,
-    {
+    pub struct Ports<SPI: 'static, EN: 'static, M: RawMutex + 'static> {
+        pub interrupts: ReadInterrupts<SPI, EN, M>,
         #(
-            pub port~N: Mode0Port<'a, SPI, EN>,
+            pub port~N: Mode0Port<SPI, EN, M>,
         )*
-        pub interrupts: ReadInterrupts<'a, SPI, EN>
+    }
+});
+
+seq!(N in 0..20 {
+    impl<SPI, EN, M> Ports<SPI, EN, M>
+    where
+        SPI: SpiBus,
+        EN: OutputPin,
+        M: RawMutex,
+    {
+        pub fn new(max: &'static Mutex<M, Max11300<SPI, EN>>) -> Self {
+            Self {
+                interrupts: ReadInterrupts::new(max),
+                #(
+                    port~N: Mode0Port::new(Port::P~N, max),
+                )*
+            }
+        }
     }
 });
 
@@ -367,10 +371,20 @@ mod tests {
     };
 
     use super::*;
-    use embedded_hal_mock::eh1::pin::{
-        Mock as PinMock, State as PinState, Transaction as PinTransaction,
-    };
+    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
     use embedded_hal_mock::eh1::spi::{Mock as SpiMock, Transaction as SpiTransaction};
+    use embedded_hal_mock::{
+        common::Generic,
+        eh1::digital::{Mock as PinMock, State as PinState, Transaction as PinTransaction},
+    };
+    use static_cell::StaticCell;
+
+    type MockMax = Max11300<Generic<SpiTransaction<u8>>, Generic<PinTransaction>>;
+
+    static MAX0: StaticCell<Mutex<NoopRawMutex, MockMax>> = StaticCell::new();
+    static MAX1: StaticCell<Mutex<NoopRawMutex, MockMax>> = StaticCell::new();
+    static MAX2: StaticCell<Mutex<NoopRawMutex, MockMax>> = StaticCell::new();
+    static MAX3: StaticCell<Mutex<NoopRawMutex, MockMax>> = StaticCell::new();
 
     #[tokio::test]
     async fn into_configured() {
@@ -390,7 +404,7 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let _max = Max11300::new(spi.clone(), pin.clone(), config)
+        let _max = Max11300::try_new(spi.clone(), pin.clone(), config)
             .await
             .unwrap();
         pin.done();
@@ -423,10 +437,13 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let mut max = Max11300::new(spi.clone(), pin.clone(), config)
+        let max = Max11300::try_new(spi.clone(), pin.clone(), config)
             .await
             .unwrap();
-        let ports = max.split();
+
+        let max = MAX0.init(Mutex::new(max));
+        let ports = Ports::new(max);
+
         // Configure port 5 for the first time
         let port5 = ports.port5.into_configured_port(ConfigMode1).await.unwrap();
         // Reconfigure port 5
@@ -468,10 +485,13 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let mut max = Max11300::new(spi.clone(), pin.clone(), config)
+        let max = Max11300::try_new(spi.clone(), pin.clone(), config)
             .await
             .unwrap();
-        let ports = max.split();
+
+        let max = MAX1.init(Mutex::new(max));
+        let ports = Ports::new(max);
+
         let port5 = ports
             .port5
             .into_configured_port(ConfigMode5(DACRANGE::Rg0_10v))
@@ -508,10 +528,13 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let mut max = Max11300::new(spi.clone(), pin.clone(), config)
+        let max = Max11300::try_new(spi.clone(), pin.clone(), config)
             .await
             .unwrap();
-        let ports = max.split();
+
+        let max = MAX2.init(Mutex::new(max));
+        let ports = Ports::new(max);
+
         let port5 = ports
             .port5
             .into_configured_port(ConfigMode7(
@@ -556,10 +579,13 @@ mod tests {
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
-        let mut max = Max11300::new(spi.clone(), pin.clone(), config)
+        let max = Max11300::try_new(spi.clone(), pin.clone(), config)
             .await
             .unwrap();
-        let ports = max.split();
+
+        let max = MAX3.init(Mutex::new(max));
+        let ports = Ports::new(max);
+
         let port5 = ports
             .port5
             .into_configured_port(ConfigMode5(DACRANGE::Rg0_10v))
