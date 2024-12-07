@@ -562,6 +562,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn config_mode_7_direct() {
+        let config = DeviceConfig::default();
+        let pin_expectations = [
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+        ];
+        let spi_expectations = [
+            // connection check
+            SpiTransaction::transfer(vec![1], vec![0x0, 0x04, 0x24]),
+            // write default configuration
+            SpiTransaction::write_vec(vec![0x10 << 1, 0, 0]),
+            // configure port
+            SpiTransaction::write_vec(vec![0x25 << 1, 113, 192]),
+            // read value on port
+            SpiTransaction::transfer(vec![0x45 << 1 | 1], vec![0x0, 0x1, 0x1]),
+        ];
+        let mut pin = PinMock::new(&pin_expectations);
+        let mut spi = SpiMock::new(&spi_expectations);
+        let mut max = Max11300::try_new(spi.clone(), pin.clone(), config)
+            .await
+            .unwrap();
+
+        let port = Port::try_from(5).unwrap();
+        max.configure_port(
+            port,
+            ConfigMode7(AVR::InternalRef, ADCRANGE::Rg0_10v, NSAMPLES::Samples64),
+        )
+        .await
+        .unwrap();
+
+        let val = max.adc_get_value(port).await.unwrap();
+
+        assert_eq!(val, 257);
+        pin.done();
+        spi.done();
+    }
+
+    #[tokio::test]
     async fn multiport() {
         let config = DeviceConfig::default();
         let pin_expectations = [
