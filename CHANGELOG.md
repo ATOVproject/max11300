@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/AtoVproject/max11300/compare/v0.4.0...v0.4.1) - 2024-12-07
+
+### Other
+
+- temporarily disable clippy
+
 ## [0.4.0](https://github.com/AtoVproject/max11300/compare/v0.3.0...v0.4.0) - 2024-11-08
 
 ### Other
