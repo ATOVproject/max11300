@@ -185,7 +185,7 @@ pub struct TMPCTL(u8, u8, u8);
 
 impl From<TMPCTL> for u16 {
     fn from(tmpctl: TMPCTL) -> Self {
-        (tmpctl.2 as u16) << 2 | (tmpctl.1 as u16) << 1 | tmpctl.0 as u16
+        ((tmpctl.2 as u16) << 2) | ((tmpctl.1 as u16) << 1) | tmpctl.0 as u16
     }
 }
 
@@ -246,15 +246,15 @@ pub struct DeviceConfig {
 
 impl DeviceConfig {
     pub fn as_u16(&self) -> u16 {
-        (self.brst as u16) << 14
-            | (self.lpen as u16) << 13
-            | (self.rscancel as u16) << 12
-            | (self.tmpper as u16) << 11
-            | u16::from(self.tmpctl) << 8
-            | (self.thshdn as u16) << 7
-            | (self.dacref as u16) << 6
-            | (self.adcconv as u16) << 4
-            | (self.dacctl as u16) << 2
+        ((self.brst as u16) << 14)
+            | ((self.lpen as u16) << 13)
+            | ((self.rscancel as u16) << 12)
+            | ((self.tmpper as u16) << 11)
+            | (u16::from(self.tmpctl) << 8)
+            | ((self.thshdn as u16) << 7)
+            | ((self.dacref as u16) << 6)
+            | ((self.adcconv as u16) << 4)
+            | ((self.dacctl as u16) << 2)
             | self.adcctl as u16
     }
 }
@@ -525,7 +525,7 @@ impl ConfigMode3 {
 pub struct ConfigMode4(pub INV, pub Port);
 impl ConfigMode4 {
     pub(crate) fn as_u16(&self) -> u16 {
-        0x4 << 12 | self.0.as_u16() | self.1 as u16
+        (0x4 << 12) | self.0.as_u16() | self.1 as u16
     }
 }
 
@@ -534,7 +534,7 @@ impl ConfigMode4 {
 pub struct ConfigMode5(pub DACRANGE);
 impl ConfigMode5 {
     pub(crate) fn as_u16(&self) -> u16 {
-        0x5 << 12 | self.0.as_u16()
+        (0x5 << 12) | self.0.as_u16()
     }
 }
 
@@ -543,7 +543,7 @@ impl ConfigMode5 {
 pub struct ConfigMode6(pub AVR, pub DACRANGE);
 impl ConfigMode6 {
     pub(crate) fn as_u16(&self) -> u16 {
-        0x6 << 12 | self.0.as_u16() | self.1.as_u16()
+        (0x6 << 12) | self.0.as_u16() | self.1.as_u16()
     }
 }
 
@@ -552,7 +552,7 @@ impl ConfigMode6 {
 pub struct ConfigMode7(pub AVR, pub ADCRANGE, pub NSAMPLES);
 impl ConfigMode7 {
     pub(crate) fn as_u16(&self) -> u16 {
-        0x7 << 12 | self.0.as_u16() | self.1.as_u16() | self.2.as_u16()
+        (0x7 << 12) | self.0.as_u16() | self.1.as_u16() | self.2.as_u16()
     }
 }
 
@@ -561,7 +561,7 @@ impl ConfigMode7 {
 pub struct ConfigMode8(pub AVR, pub ADCRANGE, pub NSAMPLES, pub Port);
 impl ConfigMode8 {
     pub(crate) fn as_u16(&self) -> u16 {
-        0x8 << 12 | self.0.as_u16() | self.1.as_u16() | self.2.as_u16() | self.3.as_u16()
+        (0x8 << 12) | self.0.as_u16() | self.1.as_u16() | self.2.as_u16() | self.3.as_u16()
     }
 }
 
@@ -570,7 +570,7 @@ impl ConfigMode8 {
 pub struct ConfigMode9(pub AVR, pub ADCRANGE);
 impl ConfigMode9 {
     pub(crate) fn as_u16(&self) -> u16 {
-        0x9 << 12 | self.0.as_u16() | self.1.as_u16()
+        (0x9 << 12) | self.0.as_u16() | self.1.as_u16()
     }
 }
 
@@ -579,7 +579,7 @@ impl ConfigMode9 {
 pub struct ConfigMode10(pub AVR, pub DACRANGE);
 impl ConfigMode10 {
     pub(crate) fn as_u16(&self) -> u16 {
-        0xa << 12 | self.0.as_u16() | self.1.as_u16()
+        (0xa << 12) | self.0.as_u16() | self.1.as_u16()
     }
 }
 
@@ -588,7 +588,7 @@ impl ConfigMode10 {
 pub struct ConfigMode11(pub INV, pub Port);
 impl ConfigMode11 {
     pub(crate) fn as_u16(&self) -> u16 {
-        0xb << 12 | self.0.as_u16() | self.1.as_u16()
+        (0xb << 12) | self.0.as_u16() | self.1.as_u16()
     }
 }
 

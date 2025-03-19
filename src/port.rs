@@ -284,7 +284,7 @@ where
     }
 }
 
-impl<'a, SPI, EN, M, S, P, const N: usize> Multiport<ConfigMode5, SPI, EN, M, N>
+impl<SPI, EN, M, S, P, const N: usize> Multiport<ConfigMode5, SPI, EN, M, N>
 where
     SPI: SpiBus<Error = S> + 'static,
     EN: OutputPin<Error = P> + 'static,
