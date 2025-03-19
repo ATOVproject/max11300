@@ -155,7 +155,7 @@ where
     pub async fn int_read_gpist(&mut self) -> Result<u32, Error<S, P>> {
         let mut data = [0_u16; 2];
         self.read_registers(REG_GPI_STATUS, &mut data).await?;
-        Ok((data[0] as u32) << 16 | data[1] as u32)
+        Ok(((data[0] as u32) << 16) | data[1] as u32)
     }
 
     /// Get the mode number X (ConfigModeX) for a Port
@@ -170,11 +170,11 @@ where
         let mut buf = [0, 0, 0];
         self.enable.set_low().map_err(Error::Pin)?;
         self.spi
-            .transfer(&mut buf, &[address << 1 | 1])
+            .transfer(&mut buf, &[(address << 1) | 1])
             .await
             .map_err(Error::Spi)?;
         self.enable.set_high().map_err(Error::Pin)?;
-        Ok((buf[1] as u16) << 8 | buf[2] as u16)
+        Ok(((buf[1] as u16) << 8) | buf[2] as u16)
     }
 
     async fn read_registers<'a>(
@@ -192,13 +192,13 @@ where
         // Read values into buf
         self.enable.set_low().map_err(Error::Pin)?;
         self.spi
-            .transfer(&mut buf, &[start_address << 1 | 1])
+            .transfer(&mut buf, &[(start_address << 1) | 1])
             .await
             .map_err(Error::Spi)?;
         self.enable.set_high().map_err(Error::Pin)?;
         // Copy to data buffer
         for (i, bytes) in buf[1..].chunks(2).enumerate() {
-            data[i] = (bytes[0] as u16) << 8 | bytes[1] as u16;
+            data[i] = ((bytes[0] as u16) << 8) | bytes[1] as u16;
         }
         Ok(data)
     }
@@ -533,7 +533,7 @@ mod tests {
             // configure port
             SpiTransaction::write_vec(vec![0x25 << 1, 113, 192]),
             // read value on port
-            SpiTransaction::transfer(vec![0x45 << 1 | 1], vec![0x0, 0x1, 0x1]),
+            SpiTransaction::transfer(vec![(0x45 << 1) | 1], vec![0x0, 0x1, 0x1]),
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
@@ -581,7 +581,7 @@ mod tests {
             // configure port
             SpiTransaction::write_vec(vec![0x25 << 1, 113, 192]),
             // read value on port
-            SpiTransaction::transfer(vec![0x45 << 1 | 1], vec![0x0, 0x1, 0x1]),
+            SpiTransaction::transfer(vec![(0x45 << 1) | 1], vec![0x0, 0x1, 0x1]),
         ];
         let mut pin = PinMock::new(&pin_expectations);
         let mut spi = SpiMock::new(&spi_expectations);
