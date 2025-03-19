@@ -270,24 +270,24 @@ where
     }
 
     async fn _gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let current = self.read_register(REG_GPO_DATA + (port as u8 / 2)).await?;
+        let current = self.read_register(REG_GPO_DATA).await?;
         let pos = port as usize % 16;
         let next = current | (1 << pos);
-        self.write_register(REG_GPO_DATA + (port as u8), next).await
+        self.write_register(REG_GPO_DATA, next).await
     }
 
     async fn _gpo_set_low(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let current = self.read_register(REG_GPO_DATA + (port as u8 / 2)).await?;
+        let current = self.read_register(REG_GPO_DATA).await?;
         let pos = port as usize % 16;
         let next = current & !(1 << pos);
-        self.write_register(REG_GPO_DATA + (port as u8), next).await
+        self.write_register(REG_GPO_DATA, next).await
     }
 
     async fn _gpo_toggle(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let current = self.read_register(REG_GPO_DATA + (port as u8 / 2)).await?;
+        let current = self.read_register(REG_GPO_DATA).await?;
         let pos = port as usize % 16;
         let next = current ^ (1 << pos);
-        self.write_register(REG_GPO_DATA + (port as u8), next).await
+        self.write_register(REG_GPO_DATA, next).await
     }
 
     async fn _dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
