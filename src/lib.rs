@@ -253,12 +253,11 @@ where
     ) -> Result<(), Error<S, P>> {
         // Set IRQ mode for port
         let pos = port as usize % 8 * 2;
-        let mut current = self.read_register(REG_IRQ_MODE + (port as u8 / 3)).await?;
+        let mut current = self.read_register(REG_IRQ_MODE).await?;
         let mut next = (mode as u16) << pos;
         current &= !(0b11 << pos);
         next |= current;
-        self.write_register(REG_IRQ_MODE + (port as u8 / 3), next)
-            .await?;
+        self.write_register(REG_IRQ_MODE, next).await?;
         // Set threshold for port
         self.write_register(REG_DAC_DATA + (port as u8), threshold)
             .await
