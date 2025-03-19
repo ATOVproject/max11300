@@ -126,9 +126,8 @@ where
 
     /// Set a DAC value for a ConfigMode5 Port
     pub async fn dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
-        if self.get_mode(port) != 5 {
-            return Err(Error::Mode);
-        }
+        // Setting the DAC register values should be allowed in any mode as it is required
+        // for some mode transitions (e.g. -> Mode3)
         self._dac_set_value(port, data).await
     }
 
