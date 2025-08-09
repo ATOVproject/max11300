@@ -43,7 +43,7 @@ pub trait ConfigurePort<CONFIG, S, P> {
 
 /// Max11300 driver
 pub struct Max11300<SPI, EN> {
-    channel_config: [u16; 20],
+    channel_config: [Mode; 20],
     config: DeviceConfig,
     enable: EN,
     spi: SPI,
@@ -62,7 +62,7 @@ where
     ) -> Result<Self, Error<S, P>> {
         enable.set_high().map_err(Error::Pin)?;
         let mut max = Self {
-            channel_config: [0; 20],
+            channel_config: [Mode::Mode0(ConfigMode0); 20],
             config,
             enable,
             spi,
@@ -86,41 +86,41 @@ where
         threshold: u16,
         mode: GPIMD,
     ) -> Result<(), Error<S, P>> {
-        if self.get_mode(port) != 1 {
+        let Mode::Mode1(_) = self.get_mode(port) else {
             return Err(Error::Mode);
-        }
+        };
         self._gpi_configure_threshold(port, threshold, mode).await
     }
 
     /// Configure the digital output level for a ConfigMode3 Port
     pub async fn gpo_configure_level(&mut self, port: Port, level: u16) -> Result<(), Error<S, P>> {
-        if self.get_mode(port) != 3 {
+        let Mode::Mode3(_) = self.get_mode(port) else {
             return Err(Error::Mode);
-        }
+        };
         self._gpo_configure_level(port, level).await
     }
 
     /// Set a digital output high on a ConfigMode3 Port
     pub async fn gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        if self.get_mode(port) != 3 {
+        let Mode::Mode3(_) = self.get_mode(port) else {
             return Err(Error::Mode);
-        }
+        };
         self._gpo_set_high(port).await
     }
 
     /// Set a digital output low on a ConfigMode3 Port
     pub async fn gpo_set_low(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        if self.get_mode(port) != 3 {
+        let Mode::Mode3(_) = self.get_mode(port) else {
             return Err(Error::Mode);
-        }
+        };
         self._gpo_set_low(port).await
     }
 
     /// Toggle digital output on a ConfigMode3 Port
     pub async fn gpo_toggle(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        if self.get_mode(port) != 3 {
+        let Mode::Mode3(_) = self.get_mode(port) else {
             return Err(Error::Mode);
-        }
+        };
         self._gpo_toggle(port).await
     }
 
@@ -133,9 +133,9 @@ where
 
     /// Read an ADC value from a ConfigMode7 Port
     pub async fn adc_get_value(&mut self, port: Port) -> Result<u16, Error<S, P>> {
-        if self.get_mode(port) != 7 {
+        let Mode::Mode7(_) = self.get_mode(port) else {
             return Err(Error::Mode);
-        }
+        };
         self._adc_get_value(port).await
     }
 
@@ -158,9 +158,9 @@ where
         Ok(((data[0] as u32) << 16) | data[1] as u32)
     }
 
-    /// Get the mode number X (ConfigModeX) for a Port
-    pub fn get_mode(&self, port: Port) -> u8 {
-        ((self.channel_config[port.as_usize()] >> 12) & 0xf) as u8
+    /// Get the Mode for a Port
+    pub fn get_mode(&self, port: Port) -> Mode {
+        self.channel_config[port.as_usize()]
     }
 
     async fn read_register(&mut self, address: u8) -> Result<u16, Error<S, P>> {
@@ -304,9 +304,8 @@ seq!(N in 0..=12 {
         EN: OutputPin<Error = P>,
     {
         async fn configure_port(&mut self, port: Port, config: ConfigMode~N) -> Result<(), Error<S, P>> {
-            let cfg = config.as_u16();
             self._configure_port(port, config.as_u16()).await?;
-            self.channel_config[port.as_usize()] = cfg;
+            self.channel_config[port.as_usize()] = Mode::Mode~N(config);
             Ok(())
         }
     }
