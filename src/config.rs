@@ -601,6 +601,23 @@ impl ConfigMode12 {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Mode {
+    Mode0(ConfigMode0),
+    Mode1(ConfigMode1),
+    Mode2(ConfigMode2),
+    Mode3(ConfigMode3),
+    Mode4(ConfigMode4),
+    Mode5(ConfigMode5),
+    Mode6(ConfigMode6),
+    Mode7(ConfigMode7),
+    Mode8(ConfigMode8),
+    Mode9(ConfigMode9),
+    Mode10(ConfigMode10),
+    Mode11(ConfigMode11),
+    Mode12(ConfigMode12),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
