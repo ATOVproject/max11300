@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/ATOVproject/max11300/compare/v0.5.0...v0.5.1) - 2025-08-09
+
+### Other
+
+- Update CHANGELOG.md
+
 ## [0.5.0](https://github.com/ATOVproject/max11300/compare/v0.4.3...v0.5.0) - 2025-08-09
 
 ### Added
