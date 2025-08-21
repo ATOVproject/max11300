@@ -1,7 +1,4 @@
 name: Release-plz
-permissions:
-  pull-requests: write
-  contents: write
 on:
   push:
     branches:
@@ -14,6 +11,7 @@ jobs:
     if: ${{ github.repository_owner == 'ATOVproject' }}
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -53,3 +51,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
