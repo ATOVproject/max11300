@@ -185,10 +185,11 @@ where
         if data.len() > 20 || start_address + data.len() as u8 - 1 > MAX_ADDRESS {
             return Err(Error::Address);
         }
-        // 2x20 data bytes maximum
-        let mut buf: Vec<u8, 40> = Vec::new();
-        // Actual size of u16 output buffer times two plus address byte
-        buf.resize(data.len() * 2, 0).ok();
+        // Max 1 command byte + 2x20 data bytes
+        let mut buf: Vec<u8, 41> = Vec::new();
+        // The read buffer must be long enough for the junk byte that is read
+        // while the address is being written, PLUS the actual data bytes.
+        buf.resize(1 + data.len() * 2, 0).ok();
         // Read values into buf
         self.enable.set_low().map_err(Error::Pin)?;
         self.spi
@@ -196,8 +197,8 @@ where
             .await
             .map_err(Error::Spi)?;
         self.enable.set_high().map_err(Error::Pin)?;
-        // Copy to data buffer
-        for (i, bytes) in buf[1..].chunks(2).enumerate() {
+        // Copy to data buffer, skipping the first junk byte.
+        for (i, bytes) in buf[1..].chunks_exact(2).enumerate() {
             data[i] = ((bytes[0] as u16) << 8) | bytes[1] as u16;
         }
         Ok(data)
@@ -230,10 +231,14 @@ where
         buf.resize(data.len() * 2 + 1, 0).ok();
         // Write instruction
         buf[0] = start_address << 1;
-        for (i, &data_u16) in data.iter().enumerate() {
-            buf[i * 2 + 1] = (data_u16 >> 8) as u8;
-            buf[i * 2 + 2] = (data_u16 & 0xff) as u8;
+
+        let payload = &mut buf[1..];
+        for (bytes, &word) in payload.chunks_exact_mut(2).zip(data.iter()) {
+            let word_bytes = word.to_be_bytes();
+            bytes[0] = word_bytes[0];
+            bytes[1] = word_bytes[1];
         }
+
         self.enable.set_low().map_err(Error::Pin)?;
         self.spi.write(&buf).await.map_err(Error::Spi)?;
         self.enable.set_high().map_err(Error::Pin)?;
@@ -268,24 +273,39 @@ where
     }
 
     async fn _gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let current = self.read_register(REG_GPO_DATA).await?;
-        let pos = port as usize % 16;
-        let next = current | (1 << pos);
-        self.write_register(REG_GPO_DATA, next).await
+        let mut buf: [u16; 2] = [0; 2];
+        let regs = self.read_registers(REG_GPO_DATA, &mut buf).await?;
+        let current = (regs[1] as u32) << 16 | (regs[0] as u32);
+        let next = current | (1 << port as usize);
+
+        let next_low = next as u16;
+        let next_high = (next >> 16) as u16;
+        self.write_registers(REG_GPO_DATA, &[next_low, next_high])
+            .await
     }
 
     async fn _gpo_set_low(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let current = self.read_register(REG_GPO_DATA).await?;
-        let pos = port as usize % 16;
-        let next = current & !(1 << pos);
-        self.write_register(REG_GPO_DATA, next).await
+        let mut buf: [u16; 2] = [0; 2];
+        let regs = self.read_registers(REG_GPO_DATA, &mut buf).await?;
+        let current = (regs[1] as u32) << 16 | (regs[0] as u32);
+        let next = current & !(1 << port as usize);
+
+        let next_low = next as u16;
+        let next_high = (next >> 16) as u16;
+        self.write_registers(REG_GPO_DATA, &[next_low, next_high])
+            .await
     }
 
     async fn _gpo_toggle(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let current = self.read_register(REG_GPO_DATA).await?;
-        let pos = port as usize % 16;
-        let next = current ^ (1 << pos);
-        self.write_register(REG_GPO_DATA, next).await
+        let mut buf: [u16; 2] = [0; 2];
+        let regs = self.read_registers(REG_GPO_DATA, &mut buf).await?;
+        let current = (regs[1] as u32) << 16 | (regs[0] as u32);
+        let next = current ^ (1 << port as usize);
+
+        let next_low = next as u16;
+        let next_high = (next >> 16) as u16;
+        self.write_registers(REG_GPO_DATA, &[next_low, next_high])
+            .await
     }
 
     async fn _dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
