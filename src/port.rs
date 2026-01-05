@@ -10,11 +10,11 @@ use crate::config::{
     ConfigMode4, ConfigMode5, ConfigMode6, ConfigMode7, ConfigMode8, ConfigMode9, Port, ADCRANGE,
     AVR, DACRANGE, GPIMD, NSAMPLES, REG_ADC_DATA, REG_DAC_DATA,
 };
-use crate::{Error, Max11300};
+use crate::{Error, Max113xx};
 
 pub struct Mode0Port<SPI: 'static, EN: 'static, M: RawMutex + 'static> {
     port: Port,
-    max: &'static Mutex<M, Max11300<SPI, EN>>,
+    max: &'static Mutex<M, Max113xx<SPI, EN>>,
 }
 
 impl<SPI, EN, M> Mode0Port<SPI, EN, M>
@@ -23,7 +23,7 @@ where
     EN: OutputPin,
     M: RawMutex,
 {
-    pub(crate) fn new(port: Port, driver: &'static Mutex<M, Max11300<SPI, EN>>) -> Self {
+    pub(crate) fn new(port: Port, driver: &'static Mutex<M, Max113xx<SPI, EN>>) -> Self {
         Self { port, max: driver }
     }
 }
@@ -66,7 +66,7 @@ seq!(N in 0..=12 {
 pub struct MaxPort<CONFIG, SPI: 'static, EN: 'static, M: RawMutex + 'static> {
     config: CONFIG,
     port: Port,
-    max: &'static Mutex<M, Max11300<SPI, EN>>,
+    max: &'static Mutex<M, Max113xx<SPI, EN>>,
 }
 
 pub trait IntoMode<CONFIG, SPI, EN, M, S, P>
@@ -294,6 +294,7 @@ where
     pub async fn set_values(&mut self, data: &[u16; N]) -> Result<(), Error<S, P>> {
         // We're just using the driver of the first port here
         let mut driver = self.ports[0].max.lock().await;
+        // NOTE: This assumes REG_DAC_DATA is continuous, which it is for both chips (0x60.. or 0x62..)
         driver
             .write_registers(REG_DAC_DATA + (self.ports[0].port as u8), data)
             .await
@@ -314,5 +315,3 @@ where
             .await
     }
 }
-
-// TODO: implement mode 4, 8, 9, 10, 11, 12 as individual structs that take Mode0Ports

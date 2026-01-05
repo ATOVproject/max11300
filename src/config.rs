@@ -1,6 +1,6 @@
 use crate::Error;
 
-/// Static device id
+/// Static device id (Same for both chips)
 pub const DEVICE_ID: u16 = 0x0424;
 /// Highest addressable register address
 pub const MAX_ADDRESS: u8 = 0x73;
@@ -19,57 +19,79 @@ pub const REG_DEVICE_CTRL: u8 = 0x10;
 pub const REG_INTERRUPT_MASK: u8 = 0x11;
 /// First IRQ Mode Register
 pub const REG_IRQ_MODE: u8 = 0x12;
-/// First port config register
-pub const REG_PORT_CONFIG: u8 = 0x20;
-/// First ADC data register
-pub const REG_ADC_DATA: u8 = 0x40;
-/// First DAC data register
-pub const REG_DAC_DATA: u8 = 0x60;
+
+// Chip specific constants
+#[cfg(all(feature = "max11300", feature = "max11311"))]
+compile_error!("Features 'max11300' and 'max11311' are mutually exclusive.");
+
+#[cfg(not(any(feature = "max11300", feature = "max11311")))]
+compile_error!("One of 'max11300' or 'max11311' features must be enabled.");
+
+#[cfg(feature = "max11300")]
+pub mod device_params {
+    pub const NUM_PORTS: usize = 20;
+    /// Register address for Port 0 Configuration
+    pub const REG_PORT_CONFIG: u8 = 0x20;
+    /// Register address for Port 0 ADC Data
+    pub const REG_ADC_DATA: u8 = 0x40;
+    /// Register address for Port 0 DAC Data
+    pub const REG_DAC_DATA: u8 = 0x60;
+    /// Number of ports packed into one GPI IRQ Mode register
+    pub const PORTS_PER_IRQ_REG: usize = 8;
+    /// Number of ports packed into the first GPO Data register (0x0D)
+    pub const PORTS_IN_GPO_REG0: usize = 16;
+}
+
+#[cfg(feature = "max11311")]
+pub mod device_params {
+    pub const NUM_PORTS: usize = 12;
+    /// Register address for Port 0 Configuration (Offset by +2 compared to 11300)
+    pub const REG_PORT_CONFIG: u8 = 0x22;
+    /// Register address for Port 0 ADC Data
+    pub const REG_ADC_DATA: u8 = 0x42;
+    /// Register address for Port 0 DAC Data
+    pub const REG_DAC_DATA: u8 = 0x62;
+    /// Number of ports packed into one GPI IRQ Mode register
+    pub const PORTS_PER_IRQ_REG: usize = 6;
+    /// Number of ports packed into the first GPO Data register (0x0D).
+    /// MAX11311 packs ports 0-10 (11 ports) in 0x0D.
+    pub const PORTS_IN_GPO_REG0: usize = 11;
+}
+
+pub use device_params::*;
 
 /// Available Ports
 #[repr(u8)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Port {
-    /// Port 0
-    P0,
-    /// Port 1
-    P1,
-    /// Port 2
-    P2,
-    /// Port 3
-    P3,
-    /// Port 4
-    P4,
-    /// Port 5
-    P5,
-    /// Port 6
-    P6,
-    /// Port 7
-    P7,
-    /// Port 8
-    P8,
-    /// Port 9
-    P9,
-    /// Port 10
-    P10,
-    /// Port 11
-    P11,
-    /// Port 12
-    P12,
-    /// Port 13
-    P13,
-    /// Port 14
-    P14,
-    /// Port 15
-    P15,
-    /// Port 16
-    P16,
-    /// Port 17
-    P17,
-    /// Port 18
-    P18,
-    /// Port 19
-    P19,
+    P0 = 0,
+    P1 = 1,
+    P2 = 2,
+    P3 = 3,
+    P4 = 4,
+    P5 = 5,
+    P6 = 6,
+    P7 = 7,
+    P8 = 8,
+    P9 = 9,
+    P10 = 10,
+    P11 = 11,
+    #[cfg(feature = "max11300")]
+    P12 = 12,
+    #[cfg(feature = "max11300")]
+    P13 = 13,
+    #[cfg(feature = "max11300")]
+    P14 = 14,
+    #[cfg(feature = "max11300")]
+    P15 = 15,
+    #[cfg(feature = "max11300")]
+    P16 = 16,
+    #[cfg(feature = "max11300")]
+    P17 = 17,
+    #[cfg(feature = "max11300")]
+    P18 = 18,
+    #[cfg(feature = "max11300")]
+    P19 = 19,
 }
 
 impl Port {
@@ -88,28 +110,11 @@ impl TryFrom<usize> for Port {
     type Error = Error<(), ()>;
 
     fn try_from(value: usize) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Port::P0),
-            1 => Ok(Port::P1),
-            2 => Ok(Port::P2),
-            3 => Ok(Port::P3),
-            4 => Ok(Port::P4),
-            5 => Ok(Port::P5),
-            6 => Ok(Port::P6),
-            7 => Ok(Port::P7),
-            8 => Ok(Port::P8),
-            9 => Ok(Port::P9),
-            10 => Ok(Port::P10),
-            11 => Ok(Port::P11),
-            12 => Ok(Port::P12),
-            13 => Ok(Port::P13),
-            14 => Ok(Port::P14),
-            15 => Ok(Port::P15),
-            16 => Ok(Port::P16),
-            17 => Ok(Port::P17),
-            18 => Ok(Port::P18),
-            19 => Ok(Port::P19),
-            _ => Err(Error::Port),
+        if value < NUM_PORTS {
+            // SAFETY: Safe transmutate because Port is repr(u8) 0..=N
+            unsafe { Ok(core::mem::transmute::<u8, Port>(value as u8)) }
+        } else {
+            Err(Error::Port)
         }
     }
 }
