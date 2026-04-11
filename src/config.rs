@@ -28,7 +28,7 @@ pub const REG_DAC_DATA: u8 = 0x60;
 
 /// Available Ports
 #[repr(u8)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Port {
     /// Port 0
     P0,

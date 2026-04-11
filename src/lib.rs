@@ -47,6 +47,10 @@ pub struct Max11300<SPI, EN> {
     config: DeviceConfig,
     enable: EN,
     spi: SPI,
+    /// Shadow of the current GPODAT register state (bits 0..20 used).
+    /// Lets GPO writes skip the read-modify-write round-trip and makes
+    /// bulk updates expressible as a single SPI write.
+    gpodat: u32,
 }
 
 impl<SPI, EN, S, P> Max11300<SPI, EN>
@@ -66,6 +70,7 @@ where
             config,
             enable,
             spi,
+            gpodat: 0,
         };
         if max.read_register(REG_DEVICE_ID).await? != DEVICE_ID {
             return Err(Error::Conn);
@@ -122,6 +127,40 @@ where
             return Err(Error::Mode);
         };
         self._gpo_toggle(port).await
+    }
+
+    /// Drive multiple Mode3 GPOs high in a single SPI transaction.
+    ///
+    /// Every port in `ports` must be configured in Mode3; otherwise this
+    /// returns `Error::Mode` and the chip state is unchanged. All affected
+    /// bits in the same GPODAT register word latch simultaneously at the
+    /// hardware, so the rising edges are physically coincident at the pins.
+    pub async fn gpo_set_high_many(&mut self, ports: &[Port]) -> Result<(), Error<S, P>> {
+        let mut mask: u32 = 0;
+        for &port in ports {
+            let Mode::Mode3(_) = self.get_mode(port) else {
+                return Err(Error::Mode);
+            };
+            mask |= 1 << port as usize;
+        }
+        self._gpo_update(mask, 0).await
+    }
+
+    /// Drive multiple Mode3 GPOs low in a single SPI transaction.
+    ///
+    /// Every port in `ports` must be configured in Mode3; otherwise this
+    /// returns `Error::Mode` and the chip state is unchanged. All affected
+    /// bits in the same GPODAT register word latch simultaneously at the
+    /// hardware, so the falling edges are physically coincident at the pins.
+    pub async fn gpo_set_low_many(&mut self, ports: &[Port]) -> Result<(), Error<S, P>> {
+        let mut mask: u32 = 0;
+        for &port in ports {
+            let Mode::Mode3(_) = self.get_mode(port) else {
+                return Err(Error::Mode);
+            };
+            mask |= 1 << port as usize;
+        }
+        self._gpo_update(0, mask).await
     }
 
     /// Set a DAC value for a ConfigMode5 Port
@@ -272,40 +311,54 @@ where
             .await
     }
 
-    async fn _gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let mut buf: [u16; 2] = [0; 2];
-        let regs = self.read_registers(REG_GPO_DATA, &mut buf).await?;
-        let current = (regs[1] as u32) << 16 | (regs[0] as u32);
-        let next = current | (1 << port as usize);
+    /// Apply `set` and `clear` to the GPODAT shadow and push the resulting
+    /// state to the chip. Writes only the GPODAT register word(s) whose
+    /// bits actually changed.
+    ///
+    /// All bits in the same GPODAT word latch simultaneously at the chip,
+    /// so any subset of ports within one word (contiguous or not) updates
+    /// atomically in hardware.
+    async fn _gpo_update(&mut self, set: u32, clear: u32) -> Result<(), Error<S, P>> {
+        let prev = self.gpodat;
+        let next = (prev | set) & !clear;
+        if prev == next {
+            return Ok(());
+        }
+        self.gpodat = next;
 
-        let next_low = next as u16;
-        let next_high = (next >> 16) as u16;
-        self.write_registers(REG_GPO_DATA, &[next_low, next_high])
-            .await
+        let changed = prev ^ next;
+        let low_changed = (changed & 0x0000_FFFF) != 0;
+        let high_changed = (changed & 0x000F_0000) != 0;
+
+        match (low_changed, high_changed) {
+            (true, true) => {
+                self.write_registers(REG_GPO_DATA, &[next as u16, (next >> 16) as u16])
+                    .await
+            }
+            (true, false) => self.write_register(REG_GPO_DATA, next as u16).await,
+            (false, true) => {
+                self.write_register(REG_GPO_DATA + 1, (next >> 16) as u16)
+                    .await
+            }
+            (false, false) => Ok(()),
+        }
+    }
+
+    async fn _gpo_set_high(&mut self, port: Port) -> Result<(), Error<S, P>> {
+        self._gpo_update(1 << port as usize, 0).await
     }
 
     async fn _gpo_set_low(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let mut buf: [u16; 2] = [0; 2];
-        let regs = self.read_registers(REG_GPO_DATA, &mut buf).await?;
-        let current = (regs[1] as u32) << 16 | (regs[0] as u32);
-        let next = current & !(1 << port as usize);
-
-        let next_low = next as u16;
-        let next_high = (next >> 16) as u16;
-        self.write_registers(REG_GPO_DATA, &[next_low, next_high])
-            .await
+        self._gpo_update(0, 1 << port as usize).await
     }
 
     async fn _gpo_toggle(&mut self, port: Port) -> Result<(), Error<S, P>> {
-        let mut buf: [u16; 2] = [0; 2];
-        let regs = self.read_registers(REG_GPO_DATA, &mut buf).await?;
-        let current = (regs[1] as u32) << 16 | (regs[0] as u32);
-        let next = current ^ (1 << port as usize);
-
-        let next_low = next as u16;
-        let next_high = (next >> 16) as u16;
-        self.write_registers(REG_GPO_DATA, &[next_low, next_high])
-            .await
+        let bit = 1u32 << port as usize;
+        if self.gpodat & bit == 0 {
+            self._gpo_update(bit, 0).await
+        } else {
+            self._gpo_update(0, bit).await
+        }
     }
 
     async fn _dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
