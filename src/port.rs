@@ -8,7 +8,7 @@ use seq_macro::seq;
 use crate::config::{
     ConfigMode0, ConfigMode1, ConfigMode10, ConfigMode11, ConfigMode12, ConfigMode2, ConfigMode3,
     ConfigMode4, ConfigMode5, ConfigMode6, ConfigMode7, ConfigMode8, ConfigMode9, Port, ADCRANGE,
-    AVR, DACRANGE, GPIMD, NSAMPLES, REG_ADC_DATA, REG_DAC_DATA,
+    AVR, DACRANGE, GPIMD, NSAMPLES, REG_ADC_DATA,
 };
 use crate::{Error, Max11300};
 
@@ -53,7 +53,7 @@ seq!(N in 0..=12 {
             config: ConfigMode~N,
         ) -> Result<MaxPort<ConfigMode~N, SPI, EN, M>, Error<S, P>> {
             let mut locked_max = self.max.lock().await;
-            locked_max.write_register(self.port.as_config_addr(), config.as_u16()).await?;
+            locked_max._configure_port(self.port, config.as_u16()).await?;
             Ok(MaxPort {
                 config,
                 port: self.port,
@@ -94,7 +94,7 @@ seq!(N in 0..=12 {
             config: ConfigMode~N,
         ) -> Result<MaxPort<ConfigMode~N, SPI, EN, M>, Error<S, P>> {
             let mut driver = self.max.lock().await;
-            driver.write_register(self.port.as_config_addr(), config.as_u16()).await?;
+            driver._configure_port(self.port, config.as_u16()).await?;
             Ok(MaxPort {
                 config,
                 port: self.port,
@@ -294,9 +294,7 @@ where
     pub async fn set_values(&mut self, data: &[u16; N]) -> Result<(), Error<S, P>> {
         // We're just using the driver of the first port here
         let mut driver = self.ports[0].max.lock().await;
-        driver
-            .write_registers(REG_DAC_DATA + (self.ports[0].port as u8), data)
-            .await
+        driver.write_dac_data_many(self.ports[0].port, data).await
     }
 }
 

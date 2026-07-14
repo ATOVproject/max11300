@@ -51,6 +51,10 @@ pub struct Max11300<SPI, EN> {
     /// Lets GPO writes skip the read-modify-write round-trip and makes
     /// bulk updates expressible as a single SPI write.
     gpodat: u32,
+    /// Shadow of the DAC data registers (REG_DAC_DATA + port), which also
+    /// hold the GPO level and GPI threshold. `None` means unknown; the
+    /// next write always goes to the chip.
+    dac_data: [Option<u16>; 20],
 }
 
 impl<SPI, EN, S, P> Max11300<SPI, EN>
@@ -71,6 +75,7 @@ where
             enable,
             spi,
             gpodat: 0,
+            dac_data: [None; 20],
         };
         if max.read_register(REG_DEVICE_ID).await? != DEVICE_ID {
             return Err(Error::Conn);
@@ -284,7 +289,42 @@ where
         Ok(())
     }
 
+    /// Single choke point for REG_DAC_DATA writes: skips the SPI write when
+    /// the shadow already holds `value`. The shadow is only updated after a
+    /// successful write, so a failed transfer leaves it untouched.
+    async fn write_dac_data(&mut self, port: Port, value: u16) -> Result<(), Error<S, P>> {
+        if self.dac_data[port.as_usize()] == Some(value) {
+            return Ok(());
+        }
+        self.write_register(REG_DAC_DATA + (port as u8), value)
+            .await?;
+        self.dac_data[port.as_usize()] = Some(value);
+        Ok(())
+    }
+
+    /// Bulk variant of [`Self::write_dac_data`] for consecutive ports
+    /// starting at `start`. Skips the SPI transaction entirely when every
+    /// value matches its shadow.
+    async fn write_dac_data_many(&mut self, start: Port, data: &[u16]) -> Result<(), Error<S, P>> {
+        let first = start.as_usize();
+        let Some(shadow) = self.dac_data.get(first..first + data.len()) else {
+            return Err(Error::Port);
+        };
+        if shadow.iter().zip(data).all(|(s, &v)| *s == Some(v)) {
+            return Ok(());
+        }
+        self.write_registers(REG_DAC_DATA + (start as u8), data)
+            .await?;
+        for (shadow, &value) in self.dac_data[first..].iter_mut().zip(data) {
+            *shadow = Some(value);
+        }
+        Ok(())
+    }
+
     async fn _configure_port(&mut self, port: Port, config: u16) -> Result<(), Error<S, P>> {
+        // A mode transition may clobber or reinterpret the shared DAC data
+        // register, so forget its shadow and let the next write go through.
+        self.dac_data[port.as_usize()] = None;
         self.write_register(port.as_config_addr(), config).await
     }
 
@@ -302,13 +342,11 @@ where
         next |= current;
         self.write_register(REG_IRQ_MODE, next).await?;
         // Set threshold for port
-        self.write_register(REG_DAC_DATA + (port as u8), threshold)
-            .await
+        self.write_dac_data(port, threshold).await
     }
 
     async fn _gpo_configure_level(&mut self, port: Port, level: u16) -> Result<(), Error<S, P>> {
-        self.write_register(REG_DAC_DATA + (port as u8), level)
-            .await
+        self.write_dac_data(port, level).await
     }
 
     /// Apply `set` and `clear` to the GPODAT shadow and push the resulting
@@ -362,7 +400,7 @@ where
     }
 
     async fn _dac_set_value(&mut self, port: Port, data: u16) -> Result<(), Error<S, P>> {
-        self.write_register(REG_DAC_DATA + (port as u8), data).await
+        self.write_dac_data(port, data).await
     }
 
     async fn _adc_get_value(&mut self, port: Port) -> Result<u16, Error<S, P>> {
@@ -466,6 +504,7 @@ mod tests {
     static MAX1: StaticCell<Mutex<NoopRawMutex, MockMax>> = StaticCell::new();
     static MAX2: StaticCell<Mutex<NoopRawMutex, MockMax>> = StaticCell::new();
     static MAX3: StaticCell<Mutex<NoopRawMutex, MockMax>> = StaticCell::new();
+    static MAX4: StaticCell<Mutex<NoopRawMutex, MockMax>> = StaticCell::new();
 
     #[tokio::test]
     async fn into_configured() {
@@ -724,6 +763,161 @@ mod tests {
             .unwrap();
         let mut mp = Multiport::new([port5, port6]).unwrap();
         mp.set_values(&[42, 43]).await.unwrap();
+        pin.done();
+        spi.done();
+    }
+
+    #[tokio::test]
+    async fn dac_write_dedup() {
+        let config = DeviceConfig::default();
+        let pin_expectations = [
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+        ];
+        let spi_expectations = [
+            // connection check
+            SpiTransaction::transfer(vec![1], vec![0x0, 0x04, 0x24]),
+            // write default configuration
+            SpiTransaction::write_vec(vec![0x10 << 1, 0, 0]),
+            // configure port
+            SpiTransaction::write_vec(vec![0x25 << 1, 81, 0]),
+            // set value on port
+            SpiTransaction::write_vec(vec![0x65 << 1, 0, 42]),
+            // second write with 42 is skipped, write with 43 goes through
+            SpiTransaction::write_vec(vec![0x65 << 1, 0, 43]),
+        ];
+        let mut pin = PinMock::new(&pin_expectations);
+        let mut spi = SpiMock::new(&spi_expectations);
+        let mut max = Max11300::try_new(spi.clone(), pin.clone(), config)
+            .await
+            .unwrap();
+
+        let port = Port::try_from(5).unwrap();
+        max.configure_port(port, ConfigMode5(DACRANGE::Rg0_10v))
+            .await
+            .unwrap();
+
+        max.dac_set_value(port, 42).await.unwrap();
+        max.dac_set_value(port, 42).await.unwrap();
+        max.dac_set_value(port, 43).await.unwrap();
+        pin.done();
+        spi.done();
+    }
+
+    #[tokio::test]
+    async fn dac_shadow_invalidated_on_reconfigure() {
+        let config = DeviceConfig::default();
+        let pin_expectations = [
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+        ];
+        let spi_expectations = [
+            // connection check
+            SpiTransaction::transfer(vec![1], vec![0x0, 0x04, 0x24]),
+            // write default configuration
+            SpiTransaction::write_vec(vec![0x10 << 1, 0, 0]),
+            // configure port
+            SpiTransaction::write_vec(vec![0x25 << 1, 81, 0]),
+            // set value on port
+            SpiTransaction::write_vec(vec![0x65 << 1, 0, 42]),
+            // reconfigure port
+            SpiTransaction::write_vec(vec![0x25 << 1, 81, 0]),
+            // same value goes through again after reconfiguration
+            SpiTransaction::write_vec(vec![0x65 << 1, 0, 42]),
+        ];
+        let mut pin = PinMock::new(&pin_expectations);
+        let mut spi = SpiMock::new(&spi_expectations);
+        let mut max = Max11300::try_new(spi.clone(), pin.clone(), config)
+            .await
+            .unwrap();
+
+        let port = Port::try_from(5).unwrap();
+        max.configure_port(port, ConfigMode5(DACRANGE::Rg0_10v))
+            .await
+            .unwrap();
+        max.dac_set_value(port, 42).await.unwrap();
+        max.configure_port(port, ConfigMode5(DACRANGE::Rg0_10v))
+            .await
+            .unwrap();
+        max.dac_set_value(port, 42).await.unwrap();
+        pin.done();
+        spi.done();
+    }
+
+    #[tokio::test]
+    async fn multiport_dedup() {
+        let config = DeviceConfig::default();
+        let pin_expectations = [
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+            PinTransaction::set(PinState::Low),
+            PinTransaction::set(PinState::High),
+        ];
+        let spi_expectations = [
+            // connection check
+            SpiTransaction::transfer(vec![1], vec![0x0, 0x04, 0x24]),
+            // write default configuration
+            SpiTransaction::write_vec(vec![0x10 << 1, 0, 0]),
+            // configure ports
+            SpiTransaction::write_vec(vec![0x25 << 1, 81, 0]),
+            SpiTransaction::write_vec(vec![0x26 << 1, 81, 0]),
+            // set values on ports
+            SpiTransaction::write_vec(vec![0x65 << 1, 0, 42, 0, 43]),
+            // identical set_values is skipped, changed one goes through
+            SpiTransaction::write_vec(vec![0x65 << 1, 0, 42, 0, 44]),
+        ];
+        let mut pin = PinMock::new(&pin_expectations);
+        let mut spi = SpiMock::new(&spi_expectations);
+        let max = Max11300::try_new(spi.clone(), pin.clone(), config)
+            .await
+            .unwrap();
+
+        let max = MAX4.init(Mutex::new(max));
+        let ports = Ports::new(max);
+
+        let port5 = ports
+            .port5
+            .into_configured_port(ConfigMode5(DACRANGE::Rg0_10v))
+            .await
+            .unwrap();
+        let port6 = ports
+            .port6
+            .into_configured_port(ConfigMode5(DACRANGE::Rg0_10v))
+            .await
+            .unwrap();
+        let mut mp = Multiport::new([port5, port6]).unwrap();
+        mp.set_values(&[42, 43]).await.unwrap();
+        mp.set_values(&[42, 43]).await.unwrap();
+        mp.set_values(&[42, 44]).await.unwrap();
         pin.done();
         spi.done();
     }
